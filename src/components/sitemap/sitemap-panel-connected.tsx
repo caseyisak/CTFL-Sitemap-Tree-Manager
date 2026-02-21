@@ -309,14 +309,39 @@ export function SitemapPanelWithCallback({ onSelectNode, sitemap, onSitemapChang
     setShowAddDialog(true)
   }, [])
 
-  const handleConfirmAdd = () => {
+  const handleConfirmAdd = async () => {
     if (!addParentId || !newPageTitle.trim()) return
 
-    const newSitemap = JSON.parse(JSON.stringify(sitemap)) as SitemapNode
+    const newSlug = newPageTitle.toLowerCase().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, "-")
 
+    // Folders in the entry-editor context must become real CMA entries so they persist
+    if (newPageType === "section" && onCreateFolder) {
+      setCreatingFolder(true)
+      try {
+        const realParentId = addParentId === "root" ? null : addParentId
+        const newNode = await onCreateFolder(realParentId, newPageTitle, newSlug)
+        const newSitemap = JSON.parse(JSON.stringify(sitemap)) as SitemapNode
+        const addToParent = (node: SitemapNode): boolean => {
+          if (node.id === addParentId) { node.children.push(newNode); return true }
+          return node.children.some(addToParent)
+        }
+        addToParent(newSitemap)
+        onSitemapChange(newSitemap)
+        updateHistory(newSitemap)
+        setExpandedNodes((prev) => new Set([...prev, addParentId, newNode.id]))
+        setShowAddDialog(false)
+      } catch (e) {
+        console.error("Failed to create folder:", e)
+      } finally {
+        setCreatingFolder(false)
+      }
+      return
+    }
+
+    // Local-only path (no CMA callback, or adding a page)
+    const newSitemap = JSON.parse(JSON.stringify(sitemap)) as SitemapNode
     const addToParent = (node: SitemapNode): boolean => {
       if (node.id === addParentId) {
-        const newSlug = newPageTitle.toLowerCase().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, "-")
         const newNode: SitemapNode = {
           id: `${newSlug}-${Date.now()}`,
           title: newPageTitle,
@@ -331,28 +356,19 @@ export function SitemapPanelWithCallback({ onSelectNode, sitemap, onSitemapChang
       }
       return node.children.some(addToParent)
     }
-
     addToParent(newSitemap)
     onSitemapChange(newSitemap)
     updateHistory(newSitemap)
-    // Expand parent and the new node (if it's a folder)
-    const newNodeId = `${newPageTitle.toLowerCase().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, "-")}-${Date.now()}`
     setExpandedNodes((prev) => {
       const next = new Set([...prev, addParentId])
-      if (newPageType === "section") {
-        // Find the actual new node ID (it was just created)
-        const findNewNode = (node: SitemapNode): string | null => {
-          const newChild = node.children.find(c => c.title === newPageTitle && c.type === newPageType)
-          if (newChild) return newChild.id
-          for (const child of node.children) {
-            const found = findNewNode(child)
-            if (found) return found
-          }
-          return null
-        }
-        const actualId = findNewNode(newSitemap)
-        if (actualId) next.add(actualId)
+      const findNewNode = (node: SitemapNode): string | null => {
+        const newChild = node.children.find(c => c.title === newPageTitle && c.type === newPageType)
+        if (newChild) return newChild.id
+        for (const child of node.children) { const found = findNewNode(child); if (found) return found }
+        return null
       }
+      const actualId = findNewNode(newSitemap)
+      if (actualId) next.add(actualId)
       return next
     })
     setShowAddDialog(false)
@@ -717,10 +733,10 @@ export function SitemapPanelWithCallback({ onSelectNode, sitemap, onSitemapChang
             </Button>
             <Button
               onClick={handleConfirmAdd}
-              disabled={!newPageTitle.trim()}
+              disabled={!newPageTitle.trim() || creatingFolder}
               className="bg-[var(--cf-blue-500)] hover:bg-[var(--cf-blue-600)]"
             >
-              {newPageType === "section" ? "Add folder" : "Add page"}
+              {creatingFolder ? "Creating…" : newPageType === "section" ? "Add folder" : "Add page"}
             </Button>
           </DialogFooter>
         </DialogContent>

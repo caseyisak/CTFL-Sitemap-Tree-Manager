@@ -1,4 +1,4 @@
-import type { ContentfulPageEntry, SitemapMetadata } from "./contentful-types"
+import type { ContentfulPageEntry, FolderNode, SitemapMetadata } from "./contentful-types"
 import type { SitemapNode } from "./sitemap-types"
 
 /**
@@ -77,6 +77,78 @@ export function buildSitemapTree(entries: ContentfulPageEntry[]): SitemapNode {
     const node = nodeMap.get(entry.id)!
     const parentId = entry.metadata?.parentEntryId ?? null
 
+    if (parentId && nodeMap.has(parentId)) {
+      nodeMap.get(parentId)!.children.push(node)
+    } else {
+      root.children.push(node)
+    }
+  }
+
+  return root
+}
+
+/**
+ * Builds a SitemapNode tree from a folder config array + flat page entries.
+ * Folders (from the Sitemap entry's folderConfig field) become "section" nodes.
+ * Page entries become "page" nodes. Both can reference each other as parents.
+ */
+export function buildSitemapTreeWithFolders(
+  folders: FolderNode[],
+  entries: ContentfulPageEntry[]
+): SitemapNode {
+  const root: SitemapNode = {
+    id: "root",
+    title: "Sitemap",
+    slug: "",
+    type: "root",
+    status: "published",
+    children: [],
+    isExpanded: true,
+  }
+
+  const nodeMap = new Map<string, SitemapNode>()
+
+  // Create folder nodes (type: "section")
+  for (const folder of folders) {
+    nodeMap.set(folder.id, {
+      id: folder.id,
+      title: folder.title,
+      slug: folder.slug,
+      type: "section",
+      status: "published",
+      children: [],
+      isExpanded: true,
+    })
+  }
+
+  // Create page nodes
+  for (const entry of entries) {
+    nodeMap.set(entry.id, {
+      id: entry.id,
+      title: entry.title,
+      slug: entry.slug ?? "",
+      type: "page",
+      status: entry.sys.publishedAt ? "published" : "draft",
+      children: [],
+      isExpanded: true,
+      excludeFromSitemap: entry.excludeFromSitemap,
+    })
+  }
+
+  // Wire folder parents
+  for (const folder of folders) {
+    const node = nodeMap.get(folder.id)!
+    if (folder.parentId && nodeMap.has(folder.parentId)) {
+      nodeMap.get(folder.parentId)!.children.push(node)
+    } else {
+      root.children.push(node)
+    }
+  }
+
+  // Wire page parents
+  for (const entry of entries) {
+    const node = nodeMap.get(entry.id)!
+    const parentId = entry.metadata?.parentEntryId ?? null
     if (parentId && nodeMap.has(parentId)) {
       nodeMap.get(parentId)!.children.push(node)
     } else {
