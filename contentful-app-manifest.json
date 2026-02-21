@@ -1,0 +1,12 @@
+{
+  "id": "sitemap-tree-manager",
+  "name": "Sitemap Tree Manager",
+  "locations": [
+    { "location": "app-config" },
+    {
+      "location": "entry-field",
+      "fieldTypes": [{ "name": "Symbol" }, { "name": "Object" }]
+    },
+    { "location": "entry-editor" }
+  ]
+}
