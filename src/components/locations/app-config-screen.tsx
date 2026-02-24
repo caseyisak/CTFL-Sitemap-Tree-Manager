@@ -288,6 +288,11 @@ export function AppConfigScreen() {
       editorInterfaceAssignments[sitemapCtId] = {
         editors: { position: 0 },
       }
+
+      // Auto-sync the contentTypes field's "Accept only specified values" list
+      // to match the current enabledContentTypes. Runs silently on every save.
+      await syncContentTypesValidation(sitemapCtId, enabledContentTypes)
+      await applyCheckboxAppearance(sitemapCtId)
     }
 
     return {
@@ -312,6 +317,56 @@ export function AppConfigScreen() {
   }, [handleConfigure])
 
   // ── CT and entry creation ──────────────────────────────────────────────────────
+
+  /**
+   * Sets the `contentTypes` field widget on the Sitemap CT editor interface to
+   * "Checkbox" (builtin). Safe to call multiple times — skips if already set.
+   */
+  const applyCheckboxAppearance = async (ctId: string) => {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const ei = await (sdk.cma.editorInterface as any).get({ contentTypeId: ctId })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const controls: Array<Record<string, any>> = ei.controls ?? []
+      if (controls.some((c) => c.fieldId === "contentTypes" && c.widgetId === "checkbox")) return
+      const updated = controls.filter((c) => c.fieldId !== "contentTypes")
+      updated.push({ fieldId: "contentTypes", widgetId: "checkbox", widgetNamespace: "builtin" })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (sdk.cma.editorInterface as any).update(
+        { contentTypeId: ctId },
+        { ...ei, controls: updated }
+      )
+    } catch (e) {
+      console.warn("Could not set checkbox appearance for contentTypes field:", e)
+    }
+  }
+
+  /**
+   * Updates the Sitemap CT's `contentTypes` field `in` validation to exactly
+   * match the current `enabledContentTypes` list, then publishes the CT.
+   * Called on every app-config save so options stay in sync automatically.
+   */
+  const syncContentTypesValidation = async (ctId: string, ctIds: string[]) => {
+    try {
+      const ct = await sdk.cma.contentType.get({ contentTypeId: ctId })
+      const hasField = (ct.fields ?? []).some((f) => f.id === "contentTypes")
+      if (!hasField) return
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const updatedFields = (ct.fields ?? []).map((f: any) =>
+        f.id === "contentTypes"
+          ? { ...f, items: { type: "Symbol", validations: ctIds.length ? [{ in: ctIds }] : [] } }
+          : f
+      )
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const updatedCt = await (sdk.cma.contentType.update as any)(
+        { contentTypeId: ctId },
+        { ...ct, fields: updatedFields }
+      )
+      await sdk.cma.contentType.publish({ contentTypeId: ctId }, updatedCt)
+    } catch (e) {
+      console.warn("Could not sync contentTypes field validation:", e)
+    }
+  }
 
   /** Creates the Sitemap CT with ID "sitemap" + all 8 fields + root entry in one shot. */
   const handleCreateSitemapContentType = async () => {
@@ -357,7 +412,10 @@ export function AppConfigScreen() {
               type: "Array",
               required: false,
               localized: false,
-              items: { type: "Symbol" },
+              items: {
+                type: "Symbol",
+                validations: enabledContentTypes.length ? [{ in: enabledContentTypes }] : [],
+              },
             },
             {
               id: "changeFrequency",
@@ -379,6 +437,9 @@ export function AppConfigScreen() {
         }
       )
       const publishedCt = await sdk.cma.contentType.publish({ contentTypeId: ct.sys.id }, ct)
+
+      // Set checkbox appearance for contentTypes field
+      await applyCheckboxAppearance(publishedCt.sys.id)
 
       // Create root entry
       const entry = await sdk.cma.entry.create(
@@ -429,7 +490,10 @@ export function AppConfigScreen() {
       } else if (fieldDef.id === "childSitemaps") {
         newField.items = { type: "Link", linkType: "Entry", validations: [{ linkContentType: ["sitemap"] }] }
       } else if (fieldDef.id === "contentTypes") {
-        newField.items = { type: "Symbol" }
+        newField.items = {
+          type: "Symbol",
+          validations: enabledContentTypes.length ? [{ in: enabledContentTypes }] : [],
+        }
       } else if (fieldDef.id === "changeFrequency") {
         newField.validations = [{ in: ["always", "hourly", "daily", "weekly", "monthly", "yearly", "never"] }]
       } else if (fieldDef.id === "priority") {
@@ -443,6 +507,12 @@ export function AppConfigScreen() {
       )
       await sdk.cma.contentType.publish({ contentTypeId: sitemapCtId }, updatedCt)
       setExistingFieldIds((prev) => new Set([...prev, fieldDef.id]))
+
+      // If we just added contentTypes, also set checkbox appearance
+      if (fieldDef.id === "contentTypes") {
+        await applyCheckboxAppearance(sitemapCtId)
+      }
+
       setCreateStatus({ type: "success", msg: `Field "${fieldDef.name}" added.` })
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
