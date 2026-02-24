@@ -9,20 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover"
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "@/components/ui/command"
-import { Globe, Folder, X, Home } from "lucide-react"
+import { Globe, Folder, X, Home, ChevronDown, ChevronUp } from "lucide-react"
 
 interface ParentEntry {
   id: string
@@ -43,7 +30,8 @@ export function EntryFieldLocation() {
   const [metadata, setMetadata] = useState<SitemapMetadata | null>(null)
   const [parentEntry, setParentEntry] = useState<ParentEntry | null>(null)
   const [allEntries, setAllEntries] = useState<ParentEntry[]>([])
-  const [popoverOpen, setPopoverOpen] = useState(false)
+  const [folderListOpen, setFolderListOpen] = useState(false)
+  const [folderSearch, setFolderSearch] = useState("")
 
   // Fetch entries for parent selection
   const fetchAllEntries = useCallback(async () => {
@@ -196,8 +184,17 @@ export function EntryFieldLocation() {
       await metadataField.setValue(newMeta)
       setMetadata(newMeta)
     }
-    setPopoverOpen(false)
+    setFolderListOpen(false)
+    setFolderSearch("")
   }
+
+  const filteredEntries = folderSearch.trim()
+    ? allEntries.filter(
+        (e) =>
+          e.title.toLowerCase().includes(folderSearch.toLowerCase()) ||
+          (e.slug ?? "").toLowerCase().includes(folderSearch.toLowerCase())
+      )
+    : allEntries
 
   return (
     <div className="p-3 space-y-4">
@@ -235,51 +232,72 @@ export function EntryFieldLocation() {
           />
         </div>
 
-        {/* Move to folder */}
-        <Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
-          <PopoverTrigger asChild>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 px-2 text-xs text-[var(--cf-gray-500)] hover:text-[var(--cf-gray-700)]"
-            >
-              <Folder className="h-3 w-3 mr-1" />
-              Move to folder...
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent className="w-64 p-0" align="start">
-            <Command>
-              <CommandInput placeholder="Search entries..." />
-              <CommandList>
-                <CommandEmpty>No entries found.</CommandEmpty>
-                <CommandGroup>
-                  <CommandItem
-                    onSelect={() => handleSetParent(null)}
-                    className="flex items-center gap-2"
+        {/* Move to folder — inline collapsible (no floating popover) */}
+        <div>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 px-2 text-xs text-[var(--cf-gray-500)] hover:text-[var(--cf-gray-700)]"
+            onClick={() => {
+              setFolderListOpen((v) => !v)
+              setFolderSearch("")
+            }}
+          >
+            <Folder className="h-3 w-3 mr-1" />
+            Move to folder...
+            {folderListOpen ? (
+              <ChevronUp className="h-3 w-3 ml-1" />
+            ) : (
+              <ChevronDown className="h-3 w-3 ml-1" />
+            )}
+          </Button>
+
+          {folderListOpen && (
+            <div className="mt-1 border border-[var(--cf-gray-200)] rounded-md bg-white overflow-hidden">
+              {/* Search */}
+              <div className="p-2 border-b border-[var(--cf-gray-100)]">
+                <Input
+                  autoFocus
+                  value={folderSearch}
+                  onChange={(e) => setFolderSearch(e.target.value)}
+                  placeholder="Search entries..."
+                  className="h-7 text-xs"
+                />
+              </div>
+              {/* List — no max-height, let autoResizer expand iframe */}
+              <div>
+                {/* Root option */}
+                <button
+                  type="button"
+                  onClick={() => handleSetParent(null)}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-[var(--cf-gray-50)] transition-colors"
+                >
+                  <Home className="h-4 w-4 text-[var(--cf-gray-500)]" />
+                  <span>Root (top level)</span>
+                </button>
+                {filteredEntries.map((entry) => (
+                  <button
+                    key={entry.id}
+                    type="button"
+                    onClick={() => handleSetParent(entry.id)}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-[var(--cf-gray-50)] transition-colors"
                   >
-                    <Home className="h-4 w-4 text-[var(--cf-gray-500)]" />
-                    <span>Root (top level)</span>
-                  </CommandItem>
-                  {allEntries.map((entry) => (
-                    <CommandItem
-                      key={entry.id}
-                      onSelect={() => handleSetParent(entry.id)}
-                      className="flex items-center gap-2"
-                    >
-                      <Folder className="h-4 w-4 text-[var(--cf-blue-500)]" />
-                      <span className="truncate">{entry.title}</span>
-                      {entry.slug && (
-                        <span className="text-xs text-[var(--cf-gray-400)] ml-auto font-mono shrink-0">
-                          /{entry.slug}
-                        </span>
-                      )}
-                    </CommandItem>
-                  ))}
-                </CommandGroup>
-              </CommandList>
-            </Command>
-          </PopoverContent>
-        </Popover>
+                    <Folder className="h-4 w-4 shrink-0 text-[var(--cf-blue-500)]" />
+                    <span className="flex-1 truncate text-[var(--cf-gray-700)]">{entry.title}</span>
+                    {entry.slug && (
+                      <span className="text-xs text-[var(--cf-gray-400)] font-mono shrink-0">
+                        /{entry.slug}
+                      </span>
+                    )}
+                  </button>
+                ))}
+                {filteredEntries.length === 0 && (
+                  <p className="px-3 py-3 text-xs text-[var(--cf-gray-400)] italic">No entries found.</p>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Full URL Path */}

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useCallback } from "react"
+import { useEffect, useState, useCallback, useRef } from "react"
 import { useSDK } from "@contentful/react-apps-toolkit"
 import type { ConfigAppSDK, AppState } from "@contentful/app-sdk"
 import type { AppInstallationParameters, ContentTypeConfig } from "@/lib/contentful-types"
@@ -15,14 +15,46 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Separator } from "@/components/ui/separator"
-import { Globe, LayoutGrid, Plus, CheckCircle2, AlertCircle } from "lucide-react"
+import { Globe, LayoutGrid, Plus, CheckCircle2, AlertCircle, ExternalLink, Copy, Check } from "lucide-react"
+
+const CHANGE_FREQ_OPTIONS = ["always", "hourly", "daily", "weekly", "monthly", "yearly", "never"] as const
 
 interface ContentTypeOption {
   id: string
   name: string
   symbolFields: Array<{ id: string; name: string }>
 }
+
+interface ChildSitemapInfo {
+  id: string
+  internalName: string
+  slug: string
+  contentTypes: string[]
+  changeFrequency: string
+  priority: number | null
+  isPublished: boolean
+}
+
+/** Required fields for the Sitemap content type and their expected types */
+const REQUIRED_SITEMAP_FIELDS = [
+  { id: "internalName", name: "Internal Name", type: "Symbol" as const },
+  { id: "slug",         name: "Slug",          type: "Symbol" as const },
+  { id: "sitemapType",  name: "Sitemap Type",  type: "Symbol" as const },
+  { id: "folderConfig", name: "Folder Config", type: "Object" as const },
+  { id: "childSitemaps",name: "Child Sitemaps",type: "Array"  as const },
+  { id: "contentTypes", name: "Content Types", type: "Array"  as const },
+  { id: "changeFrequency", name: "Change Frequency", type: "Symbol" as const },
+  { id: "priority",     name: "Priority",      type: "Number" as const },
+]
 
 export function AppConfigScreen() {
   const sdk = useSDK<ConfigAppSDK>()
@@ -34,18 +66,100 @@ export function AppConfigScreen() {
     Record<string, ContentTypeConfig>
   >({})
 
-  // Sitemap singleton state
+  // Sitemap CT state
   const [sitemapCtId, setSitemapCtId] = useState<string | null>(null)
   const [sitemapCtExists, setSitemapCtExists] = useState<boolean | null>(null)
-  const [sitemapCtHasFolderConfig, setSitemapCtHasFolderConfig] = useState(false)
-  const [sitemapEntryId, setSitemapEntryId] = useState<string | null>(null)
-  const [sitemapEntryName, setSitemapEntryName] = useState<string | null>(null)
+  const [existingFieldIds, setExistingFieldIds] = useState<Set<string>>(new Set())
+
+  // Root sitemap entry state
+  const [rootEntry, setRootEntry] = useState<{
+    id: string; internalName: string; slug: string; isPublished: boolean
+  } | null>(null)
+  const [childSitemaps, setChildSitemaps] = useState<ChildSitemapInfo[]>([])
   const [multipleEntries, setMultipleEntries] = useState<Array<{ id: string; name: string }>>([])
+  const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null)
 
   const [creating, setCreating] = useState(false)
   const [createStatus, setCreateStatus] = useState<{ type: "success" | "error"; msg: string } | null>(null)
 
-  // Load saved parameters and detect Sitemap CT on mount
+  // Add child sitemap dialog
+  const [showAddChildDialog, setShowAddChildDialog] = useState(false)
+  const [childName, setChildName] = useState("")
+  const [childSlug, setChildSlug] = useState("")
+  const [childContentTypes, setChildContentTypes] = useState<string[]>([])
+  const [addingChild, setAddingChild] = useState(false)
+  const [addChildStatus, setAddChildStatus] = useState<{ type: "success" | "error"; msg: string } | null>(null)
+
+  // robots.txt copy state
+  const [copied, setCopied] = useState(false)
+
+  // Keep handleConfigure ref fresh
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const handleConfigureRef = useRef<() => Promise<any>>(() => Promise.resolve({}))
+
+  // ── helpers ────────────────────────────────────────────────────────────────────
+
+  /** Safely reads the en-US locale value from a CMA field (which is typed as `unknown`). */
+  const loc = (field: unknown): unknown =>
+    (field as Record<string, unknown> | undefined)?.["en-US"]
+
+  const readEntryName = (fields: Record<string, unknown>): string => {
+    const internalName = loc(fields?.internalName) as string | undefined
+    const legacyName = loc(fields?.name) as string | undefined
+    const title = loc(fields?.title) as string | undefined
+    return internalName ?? legacyName ?? title ?? "(unnamed)"
+  }
+
+  const buildEntryLink = (entryId: string) => {
+    const envId = sdk.ids.environment ?? "master"
+    return `https://app.contentful.com/spaces/${sdk.ids.space}/environments/${envId}/entries/${entryId}`
+  }
+
+  // ── resolve root + children from a list of sitemap entries ────────────────────
+
+  const resolveRootAndChildren = useCallback(async (
+    items: Array<{ sys: { id: string; publishedVersion?: number }; fields: Record<string, unknown> }>
+  ) => {
+    // Find root: sitemapType = "root" || sitemapType is null (legacy)
+    const rootItem = items.find((e) => {
+      const t = loc(e.fields?.sitemapType) as string | null | undefined
+      return t === "root" || t == null
+    }) ?? items[0] // fallback to first
+
+    if (!rootItem) return
+
+    const rootId = rootItem.sys.id
+    const rootSlug = (loc(rootItem.fields?.slug) as string | undefined) ?? "sitemap-index"
+    const rootName = readEntryName(rootItem.fields)
+    const rootPublished = (rootItem.sys.publishedVersion ?? 0) > 0
+
+    setRootEntry({ id: rootId, internalName: rootName, slug: rootSlug, isPublished: rootPublished })
+    setSelectedEntryId(rootId)
+
+    // Resolve child sitemaps
+    const childLinks = (loc(rootItem.fields?.childSitemaps) as Array<{ sys: { id: string } }> | undefined) ?? []
+    const resolvedChildren: ChildSitemapInfo[] = []
+    for (const link of childLinks) {
+      try {
+        const child = await sdk.cma.entry.get({ entryId: link.sys.id })
+        const f = child.fields ?? {}
+        const ctIds = (loc(f?.contentTypes) as string[] | undefined) ?? []
+        resolvedChildren.push({
+          id: link.sys.id,
+          internalName: readEntryName(f),
+          slug: (loc(f?.slug) as string | undefined) ?? "",
+          contentTypes: ctIds,
+          changeFrequency: (loc(f?.changeFrequency) as string | undefined) ?? "",
+          priority: (loc(f?.priority) as number | undefined) ?? null,
+          isPublished: (child.sys.publishedVersion ?? 0) > 0,
+        })
+      } catch { /* child entry not accessible */ }
+    }
+    setChildSitemaps(resolvedChildren)
+  }, [sdk])
+
+  // ── init ───────────────────────────────────────────────────────────────────────
+
   useEffect(() => {
     async function init() {
       const [params, ctResponse] = await Promise.all([
@@ -57,7 +171,6 @@ export function AppConfigScreen() {
         setBaseUrl(params.baseUrl ?? "https://smu.edu")
         setEnabledContentTypes(params.enabledContentTypes ?? [])
         setContentTypeConfigs(params.contentTypeConfigs ?? {})
-        if (params.sitemapEntryId) setSitemapEntryId(params.sitemapEntryId)
       }
 
       const options: ContentTypeOption[] = (ctResponse.items ?? []).map((ct) => ({
@@ -69,45 +182,44 @@ export function AppConfigScreen() {
       }))
       setContentTypes(options)
 
-      // Detect Sitemap CT by NAME so it works regardless of auto-generated ID
-      const sitemapCt = (ctResponse.items ?? []).find(
-        (ct) => ct.name.toLowerCase() === "sitemap"
-      )
+      // Detect Sitemap CT by ID "sitemap" first, then by name
+      const sitemapCt =
+        (ctResponse.items ?? []).find((ct) => ct.sys.id === "sitemap") ??
+        (ctResponse.items ?? []).find((ct) => ct.name.toLowerCase() === "sitemap")
 
       if (sitemapCt) {
         setSitemapCtId(sitemapCt.sys.id)
         setSitemapCtExists(true)
-        const hasFolderConfig = sitemapCt.fields.some((f) => f.id === "folderConfig")
-        setSitemapCtHasFolderConfig(hasFolderConfig)
+        const fieldIds = new Set((sitemapCt.fields ?? []).map((f) => f.id))
+        setExistingFieldIds(fieldIds)
 
         // Find sitemap entries
         try {
           const entryResponse = await sdk.cma.entry.getMany({
             query: { content_type: sitemapCt.sys.id, limit: 10 },
           })
-          const items = entryResponse.items ?? []
-          const named = items.map((e) => ({
-            id: e.sys.id,
-            name:
-              (e.fields?.name?.["en-US"] as string | undefined) ??
-              (e.fields?.title?.["en-US"] as string | undefined) ??
-              e.sys.id,
-          }))
+          const items = (entryResponse.items ?? []) as Array<{
+            sys: { id: string; publishedVersion?: number }
+            fields: Record<string, unknown>
+          }>
 
-          if (items.length === 1) {
-            setSitemapEntryId(named[0].id)
-            setSitemapEntryName(named[0].name)
-          } else if (items.length > 1) {
-            setMultipleEntries(named)
-            // Use stored sitemapEntryId if it's one of the existing entries
-            const storedId = params?.sitemapEntryId
-            if (storedId && named.some((e) => e.id === storedId)) {
-              const stored = named.find((e) => e.id === storedId)!
-              setSitemapEntryId(storedId)
-              setSitemapEntryName(stored.name)
+          if (items.length === 0) {
+            // No entries yet — show create button
+          } else if (items.length === 1) {
+            await resolveRootAndChildren(items)
+          } else {
+            // Multiple: check if we can auto-detect root
+            const rootItem = items.find((e) => {
+              const t = loc(e.fields?.sitemapType) as string | null | undefined
+              return t === "root"
+            })
+            if (rootItem) {
+              await resolveRootAndChildren(items)
+            } else {
+              // Need user to pick
+              setMultipleEntries(items.map((e) => ({ id: e.sys.id, name: readEntryName(e.fields) })))
             }
           }
-          // items.length === 0 → show "Create Sitemap Entry" button
         } catch { /* ignore */ }
       } else {
         setSitemapCtExists(false)
@@ -115,28 +227,12 @@ export function AppConfigScreen() {
     }
 
     init()
-
-    sdk.app.onConfigure(() => handleConfigure())
+    sdk.app.onConfigure(() => handleConfigureRef.current())
     sdk.app.setReady()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Keep the onConfigure reference up to date
-  useEffect(() => {
-    sdk.app.onConfigure(() => handleConfigure())
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseUrl, enabledContentTypes, contentTypeConfigs, sitemapCtId, sitemapEntryId])
-
-  const toggleContentType = (ctId: string) => {
-    setEnabledContentTypes((prev) => {
-      if (prev.includes(ctId)) return prev.filter((id) => id !== ctId)
-      return [...prev, ctId]
-    })
-  }
-
-  const setSlugField = (ctId: string, slugFieldId: string) => {
-    setContentTypeConfigs((prev) => ({ ...prev, [ctId]: { slugFieldId } }))
-  }
+  // ── keep onConfigure fresh via ref ────────────────────────────────────────────
 
   const handleConfigure = useCallback(async () => {
     const currentState = await sdk.app.getCurrentState()
@@ -187,7 +283,7 @@ export function AppConfigScreen() {
       }
     }
 
-    // Also assign the Sitemap CT's editor interface
+    // Assign Sitemap CT editor interface
     if (sitemapCtId) {
       editorInterfaceAssignments[sitemapCtId] = {
         editors: { position: 0 },
@@ -200,7 +296,7 @@ export function AppConfigScreen() {
         contentTypeConfigs,
         baseUrl,
         ...(sitemapCtId ? { sitemapContentTypeId: sitemapCtId } : {}),
-        ...(sitemapEntryId ? { sitemapEntryId } : {}),
+        // sitemapEntryId intentionally omitted — detect root by sitemapType query
       },
       targetState: {
         EditorInterface: {
@@ -209,50 +305,100 @@ export function AppConfigScreen() {
         },
       },
     }
-  }, [sdk, enabledContentTypes, contentTypeConfigs, baseUrl, sitemapCtId, sitemapEntryId])
+  }, [sdk, enabledContentTypes, contentTypeConfigs, baseUrl, sitemapCtId])
 
-  /** Creates the Sitemap CT (with folderConfig field) + a singleton entry in one shot. */
+  useEffect(() => {
+    handleConfigureRef.current = handleConfigure
+  }, [handleConfigure])
+
+  // ── CT and entry creation ──────────────────────────────────────────────────────
+
+  /** Creates the Sitemap CT with ID "sitemap" + all 8 fields + root entry in one shot. */
   const handleCreateSitemapContentType = async () => {
     setCreating(true)
     setCreateStatus(null)
     try {
-      // Create the content type
-      const ct = await sdk.cma.contentType.create(
-        { spaceId: sdk.ids.space, environmentId: sdk.ids.environment ?? "master" },
+      const spaceId = sdk.ids.space
+      const environmentId = sdk.ids.environment ?? "master"
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const ct = await (sdk.cma.contentType as any).createWithId(
+        { contentTypeId: "sitemap", spaceId, environmentId },
         {
           name: "Sitemap",
-          displayField: "name",
+          displayField: "internalName",
           fields: [
-            { id: "name", name: "Name", type: "Symbol", required: true, localized: false },
+            { id: "internalName", name: "Internal Name", type: "Symbol", required: true, localized: false },
+            { id: "slug", name: "Slug", type: "Symbol", required: false, localized: false },
             {
-              id: "folderConfig",
-              name: "Folder Config",
-              type: "Object",
+              id: "sitemapType",
+              name: "Sitemap Type",
+              type: "Symbol",
               required: false,
               localized: false,
+              validations: [{ in: ["root", "child"] }],
+            },
+            { id: "folderConfig", name: "Folder Config", type: "Object", required: false, localized: false },
+            {
+              id: "childSitemaps",
+              name: "Child Sitemaps",
+              type: "Array",
+              required: false,
+              localized: false,
+              items: {
+                type: "Link",
+                linkType: "Entry",
+                validations: [{ linkContentType: ["sitemap"] }],
+              },
+            },
+            {
+              id: "contentTypes",
+              name: "Content Types",
+              type: "Array",
+              required: false,
+              localized: false,
+              items: { type: "Symbol" },
+            },
+            {
+              id: "changeFrequency",
+              name: "Change Frequency",
+              type: "Symbol",
+              required: false,
+              localized: false,
+              validations: [{ in: ["always", "hourly", "daily", "weekly", "monthly", "yearly", "never"] }],
+            },
+            {
+              id: "priority",
+              name: "Priority",
+              type: "Number",
+              required: false,
+              localized: false,
+              validations: [{ range: { min: 0, max: 1 } }],
             },
           ],
         }
       )
       const publishedCt = await sdk.cma.contentType.publish({ contentTypeId: ct.sys.id }, ct)
 
-      // Create the singleton entry
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      // Create root entry
       const entry = await sdk.cma.entry.create(
+        { contentTypeId: publishedCt.sys.id, spaceId, environmentId },
         {
-          contentTypeId: publishedCt.sys.id,
-          spaceId: sdk.ids.space,
-          environmentId: sdk.ids.environment ?? "master",
-        },
-        { fields: { name: { "en-US": "Main Sitemap" }, folderConfig: { "en-US": [] } } }
+          fields: {
+            internalName: { "en-US": "Main Sitemap" },
+            slug: { "en-US": "sitemap-index" },
+            sitemapType: { "en-US": "root" },
+            folderConfig: { "en-US": [] },
+          },
+        }
       )
 
       setSitemapCtId(publishedCt.sys.id)
       setSitemapCtExists(true)
-      setSitemapCtHasFolderConfig(true)
-      setSitemapEntryId(entry.sys.id)
-      setSitemapEntryName("Main Sitemap")
-      setCreateStatus({ type: "success", msg: `Sitemap ready! Entry ID: ${entry.sys.id}` })
+      setExistingFieldIds(new Set(REQUIRED_SITEMAP_FIELDS.map((f) => f.id)))
+      setRootEntry({ id: entry.sys.id, internalName: "Main Sitemap", slug: "sitemap-index", isPublished: false })
+      setSelectedEntryId(entry.sys.id)
+      setCreateStatus({ type: "success", msg: `Sitemap CT and root entry created.` })
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
       setCreateStatus({ type: "error", msg })
@@ -261,26 +407,43 @@ export function AppConfigScreen() {
     }
   }
 
-  /** Adds the folderConfig field to an existing Sitemap CT that doesn't have it. */
-  const handleAddFolderConfigField = async () => {
+  /** Adds a single missing field to the existing Sitemap CT. */
+  const handleAddField = async (fieldDef: typeof REQUIRED_SITEMAP_FIELDS[number]) => {
     if (!sitemapCtId) return
     setCreating(true)
     setCreateStatus(null)
     try {
       const ct = await sdk.cma.contentType.get({ contentTypeId: sitemapCtId })
-      const updatedCt = await sdk.cma.contentType.update(
+
+      // Build field object based on type
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let newField: Record<string, any> = {
+        id: fieldDef.id,
+        name: fieldDef.name,
+        type: fieldDef.type,
+        required: false,
+        localized: false,
+      }
+      if (fieldDef.id === "sitemapType") {
+        newField.validations = [{ in: ["root", "child"] }]
+      } else if (fieldDef.id === "childSitemaps") {
+        newField.items = { type: "Link", linkType: "Entry", validations: [{ linkContentType: ["sitemap"] }] }
+      } else if (fieldDef.id === "contentTypes") {
+        newField.items = { type: "Symbol" }
+      } else if (fieldDef.id === "changeFrequency") {
+        newField.validations = [{ in: ["always", "hourly", "daily", "weekly", "monthly", "yearly", "never"] }]
+      } else if (fieldDef.id === "priority") {
+        newField.validations = [{ range: { min: 0, max: 1 } }]
+      }
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const updatedCt = await (sdk.cma.contentType.update as any)(
         { contentTypeId: sitemapCtId },
-        {
-          ...ct,
-          fields: [
-            ...(ct.fields ?? []),
-            { id: "folderConfig", name: "Folder Config", type: "Object", required: false, localized: false },
-          ],
-        }
+        { ...ct, fields: [...(ct.fields ?? []), newField] }
       )
       await sdk.cma.contentType.publish({ contentTypeId: sitemapCtId }, updatedCt)
-      setSitemapCtHasFolderConfig(true)
-      setCreateStatus({ type: "success", msg: "folderConfig field added." })
+      setExistingFieldIds((prev) => new Set([...prev, fieldDef.id]))
+      setCreateStatus({ type: "success", msg: `Field "${fieldDef.name}" added.` })
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
       setCreateStatus({ type: "error", msg })
@@ -289,13 +452,12 @@ export function AppConfigScreen() {
     }
   }
 
-  /** Creates the singleton Sitemap entry when the CT exists but has no entries. */
-  const handleCreateSitemapEntry = async () => {
+  /** Creates the root Sitemap entry when CT exists but no entries exist. */
+  const handleCreateRootEntry = async () => {
     if (!sitemapCtId) return
     setCreating(true)
     setCreateStatus(null)
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const entry = await sdk.cma.entry.create(
         {
           contentTypeId: sitemapCtId,
@@ -304,14 +466,16 @@ export function AppConfigScreen() {
         },
         {
           fields: {
-            name: { "en-US": "Main Sitemap" },
-            ...(sitemapCtHasFolderConfig ? { folderConfig: { "en-US": [] } } : {}),
+            internalName: { "en-US": "Main Sitemap" },
+            slug: { "en-US": "sitemap-index" },
+            sitemapType: { "en-US": "root" },
+            folderConfig: { "en-US": [] },
           },
         }
       )
-      setSitemapEntryId(entry.sys.id)
-      setSitemapEntryName("Main Sitemap")
-      setCreateStatus({ type: "success", msg: `Entry created (ID: ${entry.sys.id})` })
+      setRootEntry({ id: entry.sys.id, internalName: "Main Sitemap", slug: "sitemap-index", isPublished: false })
+      setSelectedEntryId(entry.sys.id)
+      setCreateStatus({ type: "success", msg: `Root entry created.` })
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
       setCreateStatus({ type: "error", msg })
@@ -319,6 +483,99 @@ export function AppConfigScreen() {
       setCreating(false)
     }
   }
+
+  /** Handles "Add child sitemap" dialog submission. */
+  const handleAddChildSitemap = async () => {
+    if (!sitemapCtId || !rootEntry) return
+    setAddingChild(true)
+    setAddChildStatus(null)
+    try {
+      // Create child entry
+      const child = await sdk.cma.entry.create(
+        {
+          contentTypeId: sitemapCtId,
+          spaceId: sdk.ids.space,
+          environmentId: sdk.ids.environment ?? "master",
+        },
+        {
+          fields: {
+            internalName: { "en-US": childName },
+            slug: { "en-US": childSlug },
+            sitemapType: { "en-US": "child" },
+            contentTypes: { "en-US": childContentTypes },
+          },
+        }
+      )
+
+      // Patch root entry's childSitemaps
+      const rootEntryData = await sdk.cma.entry.get({ entryId: rootEntry.id })
+      const currentLinks = (loc(rootEntryData.fields?.childSitemaps) as Array<{ sys: { id: string; type: string; linkType: string } }> | undefined) ?? []
+      const updatedLinks = [
+        ...currentLinks,
+        { sys: { type: "Link", linkType: "Entry", id: child.sys.id } },
+      ]
+      await sdk.cma.entry.update(
+        { entryId: rootEntry.id },
+        { ...rootEntryData, fields: { ...rootEntryData.fields, childSitemaps: { "en-US": updatedLinks } } }
+      )
+
+      setChildSitemaps((prev) => [
+        ...prev,
+        {
+          id: child.sys.id,
+          internalName: childName,
+          slug: childSlug,
+          contentTypes: childContentTypes,
+          changeFrequency: "",
+          priority: null,
+          isPublished: false,
+        },
+      ])
+      setShowAddChildDialog(false)
+      setChildName("")
+      setChildSlug("")
+      setChildContentTypes([])
+      setAddChildStatus({ type: "success", msg: "Child sitemap created and linked to root." })
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setAddChildStatus({ type: "error", msg })
+    } finally {
+      setAddingChild(false)
+    }
+  }
+
+  const toggleContentType = (ctId: string) => {
+    setEnabledContentTypes((prev) => {
+      if (prev.includes(ctId)) return prev.filter((id) => id !== ctId)
+      return [...prev, ctId]
+    })
+  }
+
+  const setSlugField = (ctId: string, slugFieldId: string) => {
+    setContentTypeConfigs((prev) => ({ ...prev, [ctId]: { slugFieldId } }))
+  }
+
+  const handleCopyRobotsTxt = () => {
+    const snippet = `Sitemap: ${baseUrl}/${rootEntry?.slug ?? "sitemap-index"}.xml`
+    navigator.clipboard.writeText(snippet).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }
+
+  const toggleChildContentType = (ctId: string) => {
+    setChildContentTypes((prev) =>
+      prev.includes(ctId) ? prev.filter((id) => id !== ctId) : [...prev, ctId]
+    )
+  }
+
+  // ── missing fields detection ───────────────────────────────────────────────────
+
+  const missingFields = sitemapCtExists
+    ? REQUIRED_SITEMAP_FIELDS.filter((f) => !existingFieldIds.has(f.id))
+    : []
+
+  // ── render ────────────────────────────────────────────────────────────────────
 
   return (
     <div className="max-w-2xl mx-auto p-8 space-y-8">
@@ -443,7 +700,7 @@ export function AppConfigScreen() {
 
       <Separator />
 
-      {/* Sitemap singleton section */}
+      {/* Sitemap section */}
       <section className="space-y-4">
         <h2 className="font-semibold text-[var(--cf-gray-700)]">Sitemap</h2>
 
@@ -451,14 +708,13 @@ export function AppConfigScreen() {
           <p className="text-xs text-[var(--cf-gray-400)] italic">Checking for Sitemap content type…</p>
         )}
 
-        {/* No Sitemap CT at all → offer to create */}
+        {/* No Sitemap CT → create */}
         {sitemapCtExists === false && (
           <>
             <p className="text-xs text-[var(--cf-gray-500)]">
-              Creates a &ldquo;Sitemap&rdquo; content type with a <code>folderConfig</code> field, plus one
-              singleton entry. Opening that entry gives you the full sitemap manager and
-              sitemap.xml export. Folder structure is stored centrally and shared across all
-              page entries.
+              Creates a &ldquo;Sitemap&rdquo; content type (ID: <code>sitemap</code>) with all required fields,
+              plus one root entry. Opening that entry gives you the full sitemap manager.
+              Folder structure is stored centrally and shared across all page entries.
             </p>
             <div className="flex items-center gap-3">
               <Button
@@ -469,23 +725,10 @@ export function AppConfigScreen() {
                 className="bg-transparent"
               >
                 <Plus className="mr-1.5 h-3.5 w-3.5" />
-                {creating ? "Creating…" : "Create Sitemap"}
+                {creating ? "Creating…" : "Create Sitemap content type"}
               </Button>
               {createStatus && (
-                <span
-                  className={`flex items-center gap-1 text-xs ${
-                    createStatus.type === "error"
-                      ? "text-[var(--cf-red-500)]"
-                      : "text-[var(--cf-green-500)]"
-                  }`}
-                >
-                  {createStatus.type === "success" ? (
-                    <CheckCircle2 className="h-3.5 w-3.5" />
-                  ) : (
-                    <AlertCircle className="h-3.5 w-3.5" />
-                  )}
-                  {createStatus.msg}
-                </span>
+                <StatusMsg status={createStatus} />
               )}
             </div>
           </>
@@ -505,48 +748,43 @@ export function AppConfigScreen() {
               </div>
             </div>
 
-            {/* folderConfig field missing → offer to add */}
-            {!sitemapCtHasFolderConfig && (
-              <div className="flex items-start gap-3 p-3 rounded-md bg-[var(--cf-orange-50)] border border-[var(--cf-orange-200)]">
-                <AlertCircle className="h-4 w-4 text-[var(--cf-orange-500)] shrink-0 mt-0.5" />
-                <div className="flex-1 space-y-2">
-                  <p className="text-xs text-[var(--cf-gray-700)]">
-                    The <code>folderConfig</code> field is missing. Add it so folders can be
-                    stored centrally in the Sitemap entry instead of as separate page entries.
-                  </p>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleAddFolderConfigField}
-                    disabled={creating}
-                    className="h-7 text-xs bg-transparent"
+            {/* Missing fields — per-field warning + Add button */}
+            {missingFields.length > 0 && (
+              <div className="space-y-2">
+                {missingFields.map((f) => (
+                  <div
+                    key={f.id}
+                    className="flex items-center gap-3 p-3 rounded-md bg-[var(--cf-orange-50)] border border-[var(--cf-orange-200)]"
                   >
-                    {creating ? "Adding…" : "Add folderConfig field"}
-                  </Button>
-                </div>
+                    <AlertCircle className="h-4 w-4 text-[var(--cf-orange-500)] shrink-0" />
+                    <div className="flex-1 text-xs text-[var(--cf-gray-700)]">
+                      Missing field: <code>{f.id}</code> ({f.name})
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleAddField(f)}
+                      disabled={creating}
+                      className="h-7 text-xs bg-transparent shrink-0"
+                    >
+                      {creating ? "Adding…" : "Add field"}
+                    </Button>
+                  </div>
+                ))}
               </div>
             )}
 
-            {/* Singleton entry status */}
-            {sitemapEntryId ? (
-              <div className="flex items-center gap-2 p-3 rounded-md bg-[var(--cf-green-50)] border border-[var(--cf-green-200)]">
-                <CheckCircle2 className="h-4 w-4 text-[var(--cf-green-500)] shrink-0" />
-                <div className="text-xs text-[var(--cf-gray-700)]">
-                  <span className="font-medium">Active Sitemap entry:</span>{" "}
-                  <span>{sitemapEntryName}</span>
-                  <code className="ml-2 text-[var(--cf-gray-500)] bg-white px-1.5 py-0.5 rounded border border-[var(--cf-gray-200)]">
-                    {sitemapEntryId}
-                  </code>
-                </div>
-              </div>
-            ) : multipleEntries.length > 1 ? (
-              /* Multiple entries → warn and let user pick */
+            {createStatus && !rootEntry && (
+              <StatusMsg status={createStatus} />
+            )}
+
+            {/* Multiple entries, can't auto-detect root → picker */}
+            {!rootEntry && multipleEntries.length > 1 && (
               <div className="space-y-2 p-3 rounded-md bg-[var(--cf-orange-50)] border border-[var(--cf-orange-200)]">
                 <div className="flex items-center gap-2">
                   <AlertCircle className="h-4 w-4 text-[var(--cf-orange-500)]" />
                   <p className="text-xs font-medium text-[var(--cf-gray-700)]">
-                    Multiple Sitemap entries found — pick one as the active singleton.
-                    You can delete the others from the Content section.
+                    Multiple Sitemap entries found with no clear root. Pick one to use as root.
                   </p>
                 </div>
                 <div className="flex flex-col gap-1">
@@ -554,11 +792,11 @@ export function AppConfigScreen() {
                     <button
                       key={e.id}
                       onClick={() => {
-                        setSitemapEntryId(e.id)
-                        setSitemapEntryName(e.name)
+                        setSelectedEntryId(e.id)
+                        setRootEntry({ id: e.id, internalName: e.name, slug: "sitemap-index", isPublished: false })
                       }}
                       className={`flex items-center justify-between px-3 py-2 rounded border text-left text-xs transition-colors ${
-                        sitemapEntryId === e.id
+                        selectedEntryId === e.id
                           ? "bg-[var(--cf-blue-100)] border-[var(--cf-blue-400)] text-[var(--cf-blue-700)]"
                           : "bg-white border-[var(--cf-gray-200)] text-[var(--cf-gray-700)] hover:border-[var(--cf-blue-300)]"
                       }`}
@@ -569,64 +807,253 @@ export function AppConfigScreen() {
                   ))}
                 </div>
               </div>
-            ) : (
-              /* CT exists but no entries yet */
+            )}
+
+            {/* CT exists but no entries */}
+            {!rootEntry && multipleEntries.length === 0 && (
               <div className="space-y-2">
                 <p className="text-xs text-[var(--cf-gray-500)]">
-                  No Sitemap entry found. Create the singleton entry that will store your folder
-                  config and serve as the sitemap manager.
+                  No Sitemap entry found. Create the root entry to start managing your sitemap.
                 </p>
                 <div className="flex items-center gap-3">
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={handleCreateSitemapEntry}
+                    onClick={handleCreateRootEntry}
                     disabled={creating}
                     className="bg-transparent"
                   >
                     <Plus className="mr-1.5 h-3.5 w-3.5" />
-                    {creating ? "Creating…" : "Create Sitemap Entry"}
+                    {creating ? "Creating…" : "Create root Sitemap entry"}
                   </Button>
-                  {createStatus && (
-                    <span
-                      className={`flex items-center gap-1 text-xs ${
-                        createStatus.type === "error"
-                          ? "text-[var(--cf-red-500)]"
-                          : "text-[var(--cf-green-500)]"
-                      }`}
-                    >
-                      {createStatus.type === "success" ? (
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                      ) : (
-                        <AlertCircle className="h-3.5 w-3.5" />
-                      )}
-                      {createStatus.msg}
-                    </span>
-                  )}
+                  {createStatus && <StatusMsg status={createStatus} />}
                 </div>
               </div>
             )}
 
-            {/* Global create status (for folderConfig add etc.) */}
-            {createStatus && sitemapEntryId && (
-              <span
-                className={`flex items-center gap-1 text-xs ${
-                  createStatus.type === "error"
-                    ? "text-[var(--cf-red-500)]"
-                    : "text-[var(--cf-green-500)]"
-                }`}
-              >
-                {createStatus.type === "success" ? (
-                  <CheckCircle2 className="h-3.5 w-3.5" />
-                ) : (
-                  <AlertCircle className="h-3.5 w-3.5" />
+            {/* Root Sitemap card */}
+            {rootEntry && (
+              <div className="space-y-4">
+                <div className="p-4 rounded-lg border border-[var(--cf-green-200)] bg-[var(--cf-green-50)] space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-medium text-[var(--cf-gray-700)]">{rootEntry.internalName}</p>
+                      <p className="text-xs text-[var(--cf-gray-500)] font-mono mt-0.5">
+                        {baseUrl}/{rootEntry.slug}.xml
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {rootEntry.isPublished ? (
+                        <Badge className="bg-[var(--cf-green-100)] text-[var(--cf-green-500)] hover:bg-[var(--cf-green-100)] text-xs">
+                          Published
+                        </Badge>
+                      ) : (
+                        <Badge className="bg-[var(--cf-orange-100)] text-[var(--cf-orange-500)] hover:bg-[var(--cf-orange-100)] text-xs">
+                          Draft
+                        </Badge>
+                      )}
+                      <a
+                        href={buildEntryLink(rootEntry.id)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs flex items-center gap-1 text-[var(--cf-blue-500)] hover:underline"
+                      >
+                        Open entry
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    </div>
+                  </div>
+                  <p className="text-xs text-[var(--cf-gray-500)]">Root sitemap index</p>
+                </div>
+
+                {/* Child sitemaps */}
+                {childSitemaps.length > 0 && (
+                  <div className="space-y-2">
+                    <h3 className="text-xs font-semibold text-[var(--cf-gray-600)] uppercase tracking-wide">
+                      Child Sitemaps
+                    </h3>
+                    {childSitemaps.map((child) => (
+                      <div
+                        key={child.id}
+                        className="p-3 rounded-md border border-[var(--cf-gray-200)] bg-white space-y-1"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <p className="text-sm font-medium text-[var(--cf-gray-700)]">{child.internalName}</p>
+                            <p className="text-xs text-[var(--cf-gray-500)] font-mono">
+                              {baseUrl}/{child.slug}.xml
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            {child.isPublished ? (
+                              <Badge className="bg-[var(--cf-green-100)] text-[var(--cf-green-500)] hover:bg-[var(--cf-green-100)] text-xs">
+                                Published
+                              </Badge>
+                            ) : (
+                              <Badge className="bg-[var(--cf-orange-100)] text-[var(--cf-orange-500)] hover:bg-[var(--cf-orange-100)] text-xs">
+                                Draft
+                              </Badge>
+                            )}
+                            <a
+                              href={buildEntryLink(child.id)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs flex items-center gap-1 text-[var(--cf-blue-500)] hover:underline"
+                            >
+                              Open entry
+                              <ExternalLink className="h-3 w-3" />
+                            </a>
+                          </div>
+                        </div>
+                        {child.contentTypes.length > 0 && (
+                          <div className="flex flex-wrap gap-1 pt-1">
+                            {child.contentTypes.map((ct) => (
+                              <code key={ct} className="text-xs bg-[var(--cf-gray-100)] px-1.5 py-0.5 rounded text-[var(--cf-gray-600)]">
+                                {ct}
+                              </code>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 )}
-                {createStatus.msg}
-              </span>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowAddChildDialog(true)}
+                  className="bg-transparent"
+                >
+                  <Plus className="mr-1.5 h-3.5 w-3.5" />
+                  Add child sitemap
+                </Button>
+
+                {addChildStatus && <StatusMsg status={addChildStatus} />}
+                {createStatus && rootEntry && <StatusMsg status={createStatus} />}
+
+                {/* robots.txt snippet */}
+                <div className="space-y-2 pt-2">
+                  <h3 className="text-xs font-semibold text-[var(--cf-gray-600)] uppercase tracking-wide">
+                    robots.txt
+                  </h3>
+                  <p className="text-xs text-[var(--cf-gray-500)]">
+                    Add this line to your site&apos;s robots.txt file.
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <code className="flex-1 text-xs bg-[var(--cf-gray-100)] border border-[var(--cf-gray-200)] px-3 py-2 rounded font-mono text-[var(--cf-gray-700)]">
+                      Sitemap: {baseUrl}/{rootEntry.slug}.xml
+                    </code>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleCopyRobotsTxt}
+                      className="bg-transparent shrink-0 h-8 w-8 p-0"
+                      title="Copy to clipboard"
+                    >
+                      {copied ? <Check className="h-3.5 w-3.5 text-[var(--cf-green-500)]" /> : <Copy className="h-3.5 w-3.5" />}
+                    </Button>
+                  </div>
+                </div>
+              </div>
             )}
           </div>
         )}
       </section>
+
+      {/* Add child sitemap dialog */}
+      <Dialog open={showAddChildDialog} onOpenChange={setShowAddChildDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add child sitemap</DialogTitle>
+            <DialogDescription>
+              Creates a child sitemap entry covering specific content types. It will be linked to the root sitemap index automatically.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1">
+              <Label className="text-sm text-[var(--cf-gray-600)]">Internal Name</Label>
+              <Input
+                value={childName}
+                onChange={(e) => setChildName(e.target.value)}
+                placeholder="Blog Posts Sitemap"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-sm text-[var(--cf-gray-600)]">Slug</Label>
+              <div className="flex items-center gap-1">
+                <Input
+                  value={childSlug}
+                  onChange={(e) => setChildSlug(e.target.value)}
+                  placeholder="sitemap-blog"
+                  className="font-mono"
+                />
+                <span className="text-xs text-[var(--cf-gray-500)] shrink-0">.xml</span>
+              </div>
+              <p className="text-xs text-[var(--cf-gray-500)]">
+                URL: {baseUrl}/{childSlug || "sitemap-blog"}.xml
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-sm text-[var(--cf-gray-600)]">Content Types</Label>
+              <div className="space-y-1 max-h-40 overflow-auto">
+                {enabledContentTypes.map((ctId) => {
+                  const ct = contentTypes.find((c) => c.id === ctId)
+                  const checked = childContentTypes.includes(ctId)
+                  return (
+                    <label key={ctId} className="flex items-center gap-2 cursor-pointer p-1.5 rounded hover:bg-[var(--cf-gray-50)]">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleChildContentType(ctId)}
+                        className="h-3.5 w-3.5"
+                      />
+                      <span className="text-sm text-[var(--cf-gray-700)]">{ct?.name ?? ctId}</span>
+                      <code className="text-xs text-[var(--cf-gray-400)]">{ctId}</code>
+                    </label>
+                  )
+                })}
+                {enabledContentTypes.length === 0 && (
+                  <p className="text-xs text-[var(--cf-gray-400)] italic">No enabled content types yet.</p>
+                )}
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowAddChildDialog(false)}
+              className="bg-transparent"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleAddChildSitemap}
+              disabled={addingChild || !childName.trim() || !childSlug.trim()}
+              className="bg-[var(--cf-blue-500)] hover:bg-[var(--cf-blue-600)]"
+            >
+              {addingChild ? "Creating…" : "Create child sitemap"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
+  )
+}
+
+function StatusMsg({ status }: { status: { type: "success" | "error"; msg: string } }) {
+  return (
+    <span
+      className={`flex items-center gap-1 text-xs ${
+        status.type === "error" ? "text-[var(--cf-red-500)]" : "text-[var(--cf-green-500)]"
+      }`}
+    >
+      {status.type === "success" ? (
+        <CheckCircle2 className="h-3.5 w-3.5" />
+      ) : (
+        <AlertCircle className="h-3.5 w-3.5" />
+      )}
+      {status.msg}
+    </span>
   )
 }

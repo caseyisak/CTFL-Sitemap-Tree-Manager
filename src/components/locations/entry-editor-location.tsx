@@ -21,14 +21,17 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Download, Loader2 } from "lucide-react"
 
+const PANEL_WIDTH_KEY = "stm-panel-width"
+const DEFAULT_PANEL_WIDTH = 420
+const MIN_PANEL_WIDTH = 280
+const MAX_PANEL_WIDTH = 700
+
 export function EntryEditorLocation() {
   const sdk = useSDK<EditorAppSDK>()
   const installation = sdk.parameters.installation as AppInstallationParameters
   const baseUrl = installation?.baseUrl ?? "https://smu.edu"
   const enabledContentTypes = installation?.enabledContentTypes ?? []
   const contentTypeConfigs = installation?.contentTypeConfigs ?? {}
-  // sitemapContentTypeId from params may be null if the config hasn't been saved yet.
-  // We detect the real CT during fetchEntries and store it in state.
   const storedSitemapCtId = installation?.sitemapContentTypeId ?? null
 
   const [loading, setLoading] = useState(true)
@@ -36,24 +39,20 @@ export function EntryEditorLocation() {
   const [entries, setEntries] = useState<ContentfulPageEntry[]>([])
   const [folderConfig, setFolderConfig] = useState<FolderNode[]>([])
   const [sitemapEntryId, setSitemapEntryId] = useState<string | null>(null)
-  // Detected Sitemap CT ID — set during fetchEntries
   const [detectedSitemapCtId, setDetectedSitemapCtId] = useState<string | null>(storedSitemapCtId)
-  // True when the currently-open entry IS the Sitemap entry (shows full manager + export button)
+  /** The internalName (or legacy name) of the root Sitemap entry — used as breadcrumb root label. */
+  const [sitemapEntryName, setSitemapEntryName] = useState<string>("Sitemap")
+
   const isSitemapEntry = sdk.ids.contentType === (detectedSitemapCtId ?? storedSitemapCtId ?? "sitemap")
 
-  // ─── Refs for always-current values (avoid stale closures in callbacks) ───────
-  // Callbacks like saveFolderConfig and handleSitemapChange are captured in closures
-  // at render time, but need to read the latest sitemapEntryId / folderConfig even
-  // when called synchronously right after state-updating async operations.
+  // ─── Refs for always-current values ──────────────────────────────────────────
   const sitemapEntryIdRef = useRef<string | null>(null)
   const folderConfigRef = useRef<FolderNode[]>([])
 
-  /** Set sitemapEntryId in both state (for renders) and ref (for immediate reads). */
   const setEntryId = (id: string | null) => {
     sitemapEntryIdRef.current = id
     setSitemapEntryId(id)
   }
-  /** Set folderConfig in both state (for renders) and ref (for immediate reads). */
   const setFolders = (folders: FolderNode[]) => {
     folderConfigRef.current = folders
     setFolderConfig(folders)
@@ -65,18 +64,53 @@ export function EntryEditorLocation() {
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle")
   const [showMobile, setShowMobile] = useState(false)
 
-  // ─── Folder config persistence ───────────────────────────────────────────────
+  // ─── Resizable left panel ─────────────────────────────────────────────────────
+  const [leftPanelWidth, setLeftPanelWidth] = useState<number>(() => {
+    if (typeof window !== "undefined") {
+      const stored = localStorage.getItem(PANEL_WIDTH_KEY)
+      if (stored) {
+        const parsed = parseInt(stored, 10)
+        if (!isNaN(parsed)) return Math.max(MIN_PANEL_WIDTH, Math.min(MAX_PANEL_WIDTH, parsed))
+      }
+    }
+    return DEFAULT_PANEL_WIDTH
+  })
+  const containerRef = useRef<HTMLDivElement>(null)
+  const isDraggingRef = useRef(false)
 
-  /**
-   * Saves updated folderConfig to the singleton Sitemap entry.
-   * Uses sitemapEntryIdRef (not state) so it's never stale even when called
-   * synchronously right after fetchEntries resolves the entry ID.
-   */
+  const handleDragHandleMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    isDraggingRef.current = true
+
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!isDraggingRef.current || !containerRef.current) return
+      const containerLeft = containerRef.current.getBoundingClientRect().left
+      const newWidth = Math.max(MIN_PANEL_WIDTH, Math.min(MAX_PANEL_WIDTH, ev.clientX - containerLeft))
+      setLeftPanelWidth(newWidth)
+    }
+
+    const onMouseUp = (ev: MouseEvent) => {
+      if (!isDraggingRef.current) return
+      isDraggingRef.current = false
+      document.removeEventListener("mousemove", onMouseMove)
+      document.removeEventListener("mouseup", onMouseUp)
+      // Persist to localStorage
+      if (containerRef.current) {
+        const containerLeft = containerRef.current.getBoundingClientRect().left
+        const finalWidth = Math.max(MIN_PANEL_WIDTH, Math.min(MAX_PANEL_WIDTH, ev.clientX - containerLeft))
+        localStorage.setItem(PANEL_WIDTH_KEY, String(finalWidth))
+      }
+    }
+
+    document.addEventListener("mousemove", onMouseMove)
+    document.addEventListener("mouseup", onMouseUp)
+  }, [])
+
+  // ─── Folder config persistence ────────────────────────────────────────────────
+
   const saveFolderConfig = useCallback(async (newFolders: FolderNode[]) => {
-    // Always read from ref — guaranteed current regardless of closure age
     const entryId = sitemapEntryIdRef.current
     if (!entryId) {
-      // No sitemap entry yet — keep in local state only
       setFolders(newFolders)
       return
     }
@@ -90,7 +124,7 @@ export function EntryEditorLocation() {
     } catch (e) {
       console.error("Failed to save folderConfig:", e)
     }
-  }, [sdk]) // no dep on sitemapEntryId — uses ref instead
+  }, [sdk])
 
   // ─── Data loading ─────────────────────────────────────────────────────────────
 
@@ -98,39 +132,57 @@ export function EntryEditorLocation() {
     setLoading(true)
     setError(null)
     try {
-      // ── 1. Resolve the singleton Sitemap entry ID ──
-      let resolvedSitemapEntryId = installation?.sitemapEntryId ?? null
+      // ── 1. Resolve the root Sitemap entry ──
+      let resolvedSitemapEntryId: string | null = null
 
-      if (!resolvedSitemapEntryId) {
-        // Find the Sitemap entry: try stored CT ID first, then detect CT by name.
-        // This works even when app params haven't been saved yet (e.g. right after
-        // creating the entry from the config screen without clicking Save).
-        try {
-          let ctIdToQuery = installation?.sitemapContentTypeId ?? null
-          if (!ctIdToQuery) {
-            // Detect Sitemap CT by name — same logic as the config screen
-            const ctResp = await sdk.cma.contentType.getMany({ query: { limit: 200 } })
-            const sitemapCt = (ctResp.items ?? []).find(
-              (ct) => ct.name.toLowerCase() === "sitemap"
-            )
-            ctIdToQuery = sitemapCt?.sys.id ?? null
-            // Store for isSitemapEntry and future use
-            if (ctIdToQuery) setDetectedSitemapCtId(ctIdToQuery)
+      try {
+        let ctIdToQuery = installation?.sitemapContentTypeId ?? null
+        if (!ctIdToQuery) {
+          const ctResp = await sdk.cma.contentType.getMany({ query: { limit: 200 } })
+          const sitemapCt =
+            (ctResp.items ?? []).find((ct) => ct.sys.id === "sitemap") ??
+            (ctResp.items ?? []).find((ct) => ct.name.toLowerCase() === "sitemap")
+          ctIdToQuery = sitemapCt?.sys.id ?? null
+          if (ctIdToQuery) setDetectedSitemapCtId(ctIdToQuery)
+        }
+        if (ctIdToQuery) {
+          // Find root entry: sitemapType = "root" or null (legacy)
+          const resp = await sdk.cma.entry.getMany({
+            query: { content_type: ctIdToQuery, limit: 10 },
+          })
+          const items = resp.items ?? []
+          /** Read en-US locale value from a CMA field (typed as unknown). */
+          const loc = (field: unknown): unknown =>
+            (field as Record<string, unknown> | undefined)?.["en-US"]
+
+          const rootItem =
+            items.find((e) => {
+              const t = loc((e.fields as Record<string, unknown>)?.sitemapType) as string | null | undefined
+              return t === "root"
+            }) ??
+            items.find((e) => {
+              const t = loc((e.fields as Record<string, unknown>)?.sitemapType) as string | null | undefined
+              return t == null
+            }) ??
+            items[0] ??
+            null
+
+          if (rootItem) {
+            resolvedSitemapEntryId = rootItem.sys.id
+            // Read the display name for the breadcrumb root label
+            const f = rootItem.fields as Record<string, unknown>
+            const name =
+              (loc(f?.internalName) as string | undefined) ??
+              (loc(f?.name) as string | undefined) ??
+              "Sitemap"
+            setSitemapEntryName(name)
           }
-          if (ctIdToQuery) {
-            const resp = await sdk.cma.entry.getMany({
-              query: { content_type: ctIdToQuery, limit: 1 },
-            })
-            if ((resp.items ?? []).length > 0) {
-              resolvedSitemapEntryId = resp.items[0].sys.id
-            }
-          }
-        } catch { /* no sitemap entry available yet */ }
-      }
+        }
+      } catch { /* no sitemap entry available yet */ }
 
       setEntryId(resolvedSitemapEntryId)
 
-      // ── 2. Load folderConfig from Sitemap entry ──
+      // ── 2. Load folderConfig from root Sitemap entry ──
       let loadedFolders: FolderNode[] = []
       if (resolvedSitemapEntryId) {
         try {
@@ -186,7 +238,7 @@ export function EntryEditorLocation() {
       setLoading(false)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sdk, enabledContentTypes, contentTypeConfigs, installation?.sitemapEntryId, installation?.sitemapContentTypeId])
+  }, [sdk, enabledContentTypes, contentTypeConfigs, installation?.sitemapContentTypeId])
 
   useEffect(() => {
     fetchEntries()
@@ -202,7 +254,6 @@ export function EntryEditorLocation() {
 
   // ─── Path computation ─────────────────────────────────────────────────────────
 
-  /** Computes full slug path for a node using tree structure. Self-contained — no external deps. */
   const computeFullPath = (tree: SitemapNode, targetId: string): string => {
     let targetSlug = ""
     const walkPath = (node: SitemapNode, id: string, ancestorSlugs: string[]): string[] | null => {
@@ -229,17 +280,10 @@ export function EntryEditorLocation() {
       const changed = findChangedParentIds(originalSitemap, newSitemap)
       const realEntryIds = new Set(entries.map((e) => e.id))
 
-      // Read folderConfig from ref — always current even if state is stale
       const currentFolders = folderConfigRef.current
       const folderIds = new Set(currentFolders.map((f) => f.id))
 
-      // Separate pages from folders
       const changedPages = changed.filter(({ id }) => realEntryIds.has(id))
-
-      // Only update positions of folders that ALREADY existed in the original sitemap.
-      // Newly-added folders are handled (and saved) by handleCreateFolder — including
-      // them here would cause handleSitemapChange to overwrite the newly-saved folder
-      // with the stale (pre-add) folderConfig.
       const changedFolders = changed.filter(({ id }) =>
         !realEntryIds.has(id) && id !== "root" && folderIds.has(id)
       )
@@ -248,7 +292,6 @@ export function EntryEditorLocation() {
 
       setSaveStatus("saving")
       try {
-        // Update page entries' sitemapMetadata
         for (const { id, newParentId } of changedPages) {
           const entry = await sdk.cma.entry.get({ entryId: id })
           const ctId = entry.sys.contentType?.sys?.id ?? ""
@@ -263,7 +306,6 @@ export function EntryEditorLocation() {
               ))
           if (!hasMeta) continue
 
-          // Allow folder IDs and entry IDs as valid parents; reject anything unknown
           const resolvedParentId =
             newParentId && (realEntryIds.has(newParentId) || folderIds.has(newParentId))
               ? newParentId
@@ -280,9 +322,6 @@ export function EntryEditorLocation() {
           )
         }
 
-        // Update positions for existing folders that were dragged to a new parent.
-        // Uses currentFolders (from ref) — not the state closure — so it has the
-        // latest list including any folders added earlier in this session.
         if (changedFolders.length > 0) {
           const updatedFolders = currentFolders.map((f) => {
             const change = changedFolders.find((c) => c.id === f.id)
@@ -414,7 +453,7 @@ export function EntryEditorLocation() {
     }
   }, [sdk])
 
-  // ─── Folder CRUD (stored in folderConfig, NOT as Contentful entries) ──────────
+  // ─── Folder CRUD ──────────────────────────────────────────────────────────────
 
   const handleCreateFolder = useCallback(async (
     parentId: string | null,
@@ -423,8 +462,6 @@ export function EntryEditorLocation() {
   ): Promise<SitemapNode> => {
     const newId = `folder-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
     const newFolder: FolderNode = { id: newId, title, slug, parentId }
-    // Use ref for current folders — state closure may be stale if fetchEntries
-    // just updated it moments ago
     const updatedFolders = [...folderConfigRef.current, newFolder]
     await saveFolderConfig(updatedFolders)
     return { id: newId, title, slug, type: "section", status: "published", children: [], isExpanded: true }
@@ -437,10 +474,8 @@ export function EntryEditorLocation() {
     const isFolder = currentFolders.some((f) => f.id === nodeId)
 
     if (isFolder) {
-      // Rename folder in folderConfig
       await saveFolderConfig(currentFolders.map((f) => f.id === nodeId ? { ...f, title: newTitle } : f))
     } else {
-      // Rename real entry
       const realEntry = entries.find((e) => e.id === nodeId)
       if (realEntry) {
         const entry = await sdk.cma.entry.get({ entryId: nodeId })
@@ -454,7 +489,6 @@ export function EntryEditorLocation() {
       }
     }
 
-    // Update local tree
     setSitemap((prev) => {
       if (!prev) return prev
       const updateNode = (node: SitemapNode): SitemapNode => {
@@ -485,17 +519,14 @@ export function EntryEditorLocation() {
     const isFolder = currentFolders.some((f) => f.id === nodeId)
 
     if (isFolder) {
-      // Remove folder from folderConfig; reparent its children to the folder's parent
       const folder = currentFolders.find((f) => f.id === nodeId)!
       const newFolderParentId = folder.parentId
 
-      // Reparent child folders
       const updatedFolders = currentFolders
         .filter((f) => f.id !== nodeId)
         .map((f) => f.parentId === nodeId ? { ...f, parentId: newFolderParentId } : f)
       await saveFolderConfig(updatedFolders)
 
-      // Reparent page entries that had this folder as their parent
       const affectedEntries = entries.filter((e) => e.metadata?.parentEntryId === nodeId)
       for (const affected of affectedEntries) {
         try {
@@ -516,7 +547,6 @@ export function EntryEditorLocation() {
           : e
       ))
     } else {
-      // Delete real Contentful entry
       try {
         await sdk.cma.entry.delete({ entryId: nodeId })
         setEntries((prev) => prev.filter((e) => e.id !== nodeId))
@@ -544,7 +574,6 @@ export function EntryEditorLocation() {
   }, [sdk])
 
   const handleSaveDetails = useCallback(async (nodeId: string, data: { title: string; slug: string }) => {
-    // Folders have no Contentful entry to save to — update folderConfig
     const currentFolders = folderConfigRef.current
     const isFolder = currentFolders.some((f) => f.id === nodeId)
     if (isFolder) {
@@ -619,8 +648,17 @@ export function EntryEditorLocation() {
 
   const derivedSelectedNode = sitemap && selectedNodeId ? findNode(sitemap, selectedNodeId) : null
   const selectedEntry = selectedNodeId ? entries.find((e) => e.id === selectedNodeId) ?? null : null
-  const breadcrumb =
+
+  /**
+   * Compute breadcrumb with the root label replaced by the actual Sitemap entry name.
+   * getBreadcrumb returns e.g. ["root", "Folder A", "My Page"] — replace index 0
+   * with sitemapEntryName so users see "Main Sitemap / Folder A / My Page".
+   */
+  const rawBreadcrumb =
     sitemap && derivedSelectedNode ? getBreadcrumb(sitemap, derivedSelectedNode.id) : null
+  const breadcrumb = rawBreadcrumb
+    ? [sitemapEntryName, ...rawBreadcrumb.slice(1)]
+    : null
 
   // ─── Render ───────────────────────────────────────────────────────────────────
 
@@ -653,7 +691,7 @@ export function EntryEditorLocation() {
       <div className="flex items-center justify-between px-4 py-2 bg-white border-b border-[var(--cf-gray-200)]">
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold text-[var(--cf-gray-700)]">
-            {isSitemapEntry ? "Sitemap Manager" : "Sitemap"}
+            {isSitemapEntry ? sitemapEntryName : "Sitemap"}
           </span>
           {saveStatus === "saving" && (
             <Badge className="bg-[var(--cf-orange-100)] text-[var(--cf-orange-500)] hover:bg-[var(--cf-orange-100)] text-xs">
@@ -696,12 +734,12 @@ export function EntryEditorLocation() {
         </Button>
       </div>
 
-      {/* Main content */}
-      <main className="flex-1 flex overflow-hidden">
+      {/* Main content — resizable split */}
+      <main ref={containerRef} className="flex-1 flex overflow-hidden">
+        {/* Left panel */}
         <div
-          className={`w-full lg:w-[420px] xl:w-[500px] shrink-0 p-4 ${
-            showMobile ? "hidden lg:block" : "block"
-          }`}
+          className={`shrink-0 p-4 ${showMobile ? "hidden lg:block" : "block"}`}
+          style={{ width: leftPanelWidth }}
         >
           <SitemapPanelWithCallback
             onSelectNode={setSelectedNodeId}
@@ -716,8 +754,16 @@ export function EntryEditorLocation() {
           />
         </div>
 
+        {/* Drag handle */}
         <div
-          className={`flex-1 p-4 pl-0 overflow-hidden ${
+          className="hidden lg:flex items-center justify-center w-1 cursor-col-resize bg-[var(--cf-gray-200)] hover:bg-[var(--cf-blue-300)] transition-colors select-none shrink-0"
+          onMouseDown={handleDragHandleMouseDown}
+          style={{ userSelect: "none" }}
+        />
+
+        {/* Right panel */}
+        <div
+          className={`flex-1 p-4 pl-3 overflow-hidden ${
             showMobile ? "block" : "hidden lg:block"
           }`}
         >
