@@ -32,10 +32,11 @@ interface TreeNodeProps {
   node: SitemapNode
   depth: number
   selectedNodeId: string | null
+  selectedNodeIds?: Set<string>
   currentPageId: string | null
   expandedNodes: Set<string>
   dragState: DragState
-  onSelect: (nodeId: string) => void
+  onSelect: (nodeId: string, modifiers?: { shift?: boolean; meta?: boolean }) => void
   onToggleExpand: (nodeId: string) => void
   onDragStart: (nodeId: string) => void
   onDragEnd: () => void
@@ -53,6 +54,7 @@ export function TreeNode({
   node,
   depth,
   selectedNodeId,
+  selectedNodeIds,
   currentPageId,
   expandedNodes,
   dragState,
@@ -74,6 +76,7 @@ export function TreeNode({
 
   const isExpanded = expandedNodes.has(node.id)
   const isSelected = selectedNodeId === node.id
+  const isMultiSelected = !isSelected && (selectedNodeIds?.has(node.id) ?? false)
   const isCurrentPage = currentPageId === node.id
   const isDragging = dragState.draggedNodeId === node.id
   const isDragTarget = dragState.targetNodeId === node.id
@@ -193,15 +196,15 @@ export function TreeNode({
         onDrop={handleDrop}
         onDragEnd={handleDragEnd}
         className={cn(
-          "group relative flex items-center gap-2 rounded-md px-2 py-1.5 transition-all duration-150",
+          "group relative flex items-center rounded-md pr-2 py-1.5 transition-all duration-150",
           "hover:bg-[var(--cf-gray-100)]",
           isSelected && "bg-[var(--cf-blue-100)] hover:bg-[var(--cf-blue-100)]",
+          isMultiSelected && "bg-[var(--cf-blue-50)] ring-1 ring-[var(--cf-blue-300)] hover:bg-[var(--cf-blue-50)]",
           isCurrentPage && "ring-2 ring-[var(--cf-blue-400)] ring-offset-1",
           isDragging && "opacity-50 cursor-grabbing",
           !isDragging && !isRoot && "cursor-grab",
           isDragTarget && dropIndicator === "inside" && "bg-[var(--cf-blue-100)] ring-2 ring-[var(--cf-blue-400)] ring-inset"
         )}
-        style={{ paddingLeft: `${depth * 20 + 8}px` }}
       >
         {/* Drop indicators */}
         {dropIndicator === "before" && (
@@ -215,12 +218,33 @@ export function TreeNode({
           </div>
         )}
 
-        {/* Drag handle */}
-        {!isRoot && (
-          <div className="opacity-0 group-hover:opacity-100 transition-opacity cursor-grab active:cursor-grabbing">
-            <GripVertical className="h-4 w-4 text-[var(--cf-gray-400)]" />
+        {/* Fixed-left controls: grip + checkbox always anchored at left edge */}
+        {!isRoot ? (
+          <div className="flex items-center gap-0.5 shrink-0 pl-1">
+            <div className="opacity-0 group-hover:opacity-100 transition-opacity cursor-grab active:cursor-grabbing">
+              <GripVertical className="h-4 w-4 text-[var(--cf-gray-400)]" />
+            </div>
+            <input
+              type="checkbox"
+              checked={isSelected || isMultiSelected}
+              onChange={(e) => {
+                e.stopPropagation()
+                onSelect(node.id, { meta: true })
+              }}
+              onClick={(e) => e.stopPropagation()}
+              className={cn(
+                "h-3.5 w-3.5 shrink-0 rounded border-[var(--cf-gray-300)] accent-[var(--cf-blue-500)] cursor-pointer transition-opacity",
+                "opacity-0 group-hover:opacity-100",
+                (isSelected || isMultiSelected) && "opacity-100"
+              )}
+            />
           </div>
+        ) : (
+          <div className="w-9 shrink-0" />
         )}
+
+        {/* Depth-indented section: expand toggle → icon → content → status → actions */}
+        <div className="flex items-center gap-2 flex-1 min-w-0" style={{ paddingLeft: `${depth * 12}px` }}>
 
         {/* Expand/Collapse toggle - show for folders even if empty */}
         {(hasChildren || isFolder) ? (
@@ -246,7 +270,7 @@ export function TreeNode({
 
         {/* Node content */}
         <button
-          onClick={() => onSelect(node.id)}
+          onClick={(e) => onSelect(node.id, { shift: e.shiftKey, meta: e.metaKey || e.ctrlKey })}
           className={cn(
             "flex-1 flex items-center gap-2 text-left rounded px-2 py-1 min-w-0",
             getTypeColor()
@@ -315,6 +339,7 @@ export function TreeNode({
             )}
           </DropdownMenuContent>
         </DropdownMenu>
+        </div>{/* end depth-indented section */}
       </div>
 
       {/* Children */}
@@ -324,7 +349,7 @@ export function TreeNode({
           {hasChildren && (
             <div
               className="absolute top-0 bottom-0 w-px bg-[var(--cf-gray-300)]"
-              style={{ left: `${depth * 20 + 24}px` }}
+              style={{ left: `${depth * 12 + 60}px` }}
             />
           )}
           {node.children.map((child) => (
@@ -333,6 +358,7 @@ export function TreeNode({
               node={child}
               depth={depth + 1}
               selectedNodeId={selectedNodeId}
+              selectedNodeIds={selectedNodeIds}
               currentPageId={currentPageId}
               expandedNodes={expandedNodes}
               dragState={dragState}

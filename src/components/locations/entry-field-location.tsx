@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Globe, Folder, X, Home, ChevronDown, ChevronUp, Check } from "lucide-react"
+import { Globe, Folder, X, Home, ChevronDown, ChevronUp } from "lucide-react"
 
 interface ParentEntry {
   id: string
@@ -39,10 +39,8 @@ export function EntryFieldLocation() {
   const [folderSearch, setFolderSearch] = useState("")
 
   /**
-   * Fetch:
-   *  1. FolderNode[] from the root Sitemap entry's `folderConfig` field
-   *  2. Page entries from enabled content types (for parent selection)
-   * Combines both into the `allEntries` picker list.
+   * Fetch FolderNode[] from the root Sitemap entry's `folderConfig` field.
+   * Only folders are shown in the "Move to folder" picker — page entries are excluded.
    */
   const fetchAllEntries = useCallback(async () => {
     if (isMetadataField) return
@@ -97,46 +95,15 @@ export function EntryFieldLocation() {
         } catch { /* no sitemap entry yet */ }
       }
 
-      // ── 2. Fetch page entries from enabled content types ──
-      const enabledTypes = installation?.enabledContentTypes ?? []
-      for (const ctId of enabledTypes) {
-        const response = await sdk.cma.entry.getMany({
-          query: {
-            content_type: ctId,
-            limit: 200,
-            "sys.id[ne]": sdk.entry.getSys().id,
-          },
-        })
-
-        const configs = installation?.contentTypeConfigs ?? {}
-        const slugFieldId = configs[ctId]?.slugFieldId ?? "slug"
-
-        let titleFieldId = "title"
-        try {
-          const ctDef = await sdk.cma.contentType.get({ contentTypeId: ctId })
-          titleFieldId = ctDef.displayField ?? "title"
-        } catch { /* fall back to "title" */ }
-
-        for (const item of response.items ?? []) {
-          const fields = item.fields as Record<string, unknown>
-          const titleRaw = loc(fields[titleFieldId]) ?? loc(fields["title"])
-          const title =
-            typeof titleRaw === "string" ? titleRaw : item.sys.id
-
-          const slugRaw = loc(fields[slugFieldId])
-          const entrySlug = typeof slugRaw === "string" ? slugRaw : null
-
-          results.push({ id: item.sys.id, title, slug: entrySlug, isFolder: false })
-        }
-      }
-
       setAllEntries(results)
 
-      // Resolve current parent entry
+      // Resolve current parent entry.
+      // If the parentEntryId doesn't match any folder (e.g. it was set by drag-drop to a
+      // page entry), fall back to showing the raw ID as the badge title.
       const parentId = metadata?.parentEntryId
       if (parentId) {
         const parent = results.find((e) => e.id === parentId)
-        setParentEntry(parent ?? null)
+        setParentEntry(parent ?? { id: parentId, title: parentId, slug: null, isFolder: false })
       }
     } catch (e) {
       console.error("Failed to fetch entries for parent picker:", e)
@@ -186,11 +153,13 @@ export function EntryFieldLocation() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMetadataField])
 
-  // Resolve parent label when metadata changes
+  // Resolve parent label when metadata changes.
+  // If parentEntryId is set but not found in allEntries (folders only), show the raw ID.
   useEffect(() => {
-    if (metadata?.parentEntryId && allEntries.length > 0) {
-      const parent = allEntries.find((e) => e.id === metadata.parentEntryId)
-      setParentEntry(parent ?? null)
+    const parentId = metadata?.parentEntryId
+    if (parentId) {
+      const parent = allEntries.find((e) => e.id === parentId)
+      setParentEntry(parent ?? { id: parentId, title: parentId, slug: null, isFolder: false })
     } else {
       setParentEntry(null)
     }
@@ -270,7 +239,7 @@ export function EntryFieldLocation() {
                 className="bg-[var(--cf-blue-100)] text-[var(--cf-blue-600)] hover:bg-[var(--cf-blue-200)] px-2 py-0.5 text-xs font-mono flex items-center gap-1 shrink-0"
               >
                 <Folder className="h-3 w-3" />
-                {parentEntry.slug ?? parentEntry.title}
+                {parentEntry.title}
                 <button
                   type="button"
                   onClick={() => handleSetParent(null)}
@@ -299,8 +268,11 @@ export function EntryFieldLocation() {
             size="sm"
             className="h-6 px-2 text-xs text-[var(--cf-gray-500)] hover:text-[var(--cf-gray-700)]"
             onClick={() => {
-              setFolderListOpen((v) => !v)
+              const opening = !folderListOpen
+              setFolderListOpen(opening)
               setFolderSearch("")
+              // Re-fetch on every open so renamed/deleted folders are always fresh
+              if (opening) fetchAllEntries()
             }}
           >
             <Folder className="h-3 w-3 mr-1" />
@@ -320,7 +292,7 @@ export function EntryFieldLocation() {
                   autoFocus
                   value={folderSearch}
                   onChange={(e) => setFolderSearch(e.target.value)}
-                  placeholder="Search folders and pages..."
+                  placeholder="Search folders..."
                   className="h-7 text-xs"
                 />
               </div>
@@ -337,7 +309,9 @@ export function EntryFieldLocation() {
                   <Home className="h-4 w-4 text-[var(--cf-gray-500)]" />
                   <span className={currentParentId === null ? "font-medium" : ""}>Root (top level)</span>
                   {currentParentId === null && (
-                    <Check className="h-3.5 w-3.5 ml-auto text-[var(--cf-blue-500)]" />
+                    <span className="ml-auto shrink-0 bg-[var(--cf-blue-500)] text-white text-[10px] font-medium px-1.5 py-0.5 rounded">
+                      Current
+                    </span>
                   )}
                 </button>
                 {filteredEntries.map((entry) => {
@@ -346,7 +320,7 @@ export function EntryFieldLocation() {
                     <button
                       key={entry.id}
                       type="button"
-                      title={entry.id}
+                      title={`folder ID: ${entry.id}`}
                       onClick={() => handleSetParent(entry.id)}
                       className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-[var(--cf-gray-50)] transition-colors ${
                         isCurrent ? "bg-[var(--cf-blue-50)]" : ""
@@ -357,7 +331,9 @@ export function EntryFieldLocation() {
                         {entry.title}
                       </span>
                       {isCurrent && (
-                        <Check className="h-3.5 w-3.5 shrink-0 text-[var(--cf-blue-500)]" />
+                        <span className="ml-auto shrink-0 bg-[var(--cf-blue-500)] text-white text-[10px] font-medium px-1.5 py-0.5 rounded">
+                          Current
+                        </span>
                       )}
                       {!isCurrent && entry.slug && (
                         <span className="text-xs text-[var(--cf-gray-400)] font-mono shrink-0">
@@ -368,7 +344,7 @@ export function EntryFieldLocation() {
                   )
                 })}
                 {filteredEntries.length === 0 && (
-                  <p className="px-3 py-3 text-xs text-[var(--cf-gray-400)] italic">No folders or pages found.</p>
+                  <p className="px-3 py-3 text-xs text-[var(--cf-gray-400)] italic">No folders found.</p>
                 )}
               </div>
             </div>

@@ -647,7 +647,7 @@ export function SitemapPanelWithCallback({
             size="sm"
             onClick={() => setShowExcluded((v) => !v)}
             className={cn(
-              "h-8 text-xs shrink-0",
+              "h-8 text-xs shrink-0 w-[124px] justify-center",
               showExcluded
                 ? "bg-[var(--cf-orange-500)] hover:bg-[var(--cf-orange-500)] text-white"
                 : "bg-transparent"
@@ -691,10 +691,11 @@ export function SitemapPanelWithCallback({
           node={displayedSitemap}
           depth={0}
           selectedNodeId={primarySelectedNodeId}
+          selectedNodeIds={selectedNodeIds}
           currentPageId={currentPageId}
           expandedNodes={searchQuery ? new Set(getAllNodeIds(displayedSitemap)) : expandedNodes}
           dragState={dragState}
-          onSelect={(nodeId) => handleSelect(nodeId)}
+          onSelect={(nodeId, modifiers) => handleSelect(nodeId, modifiers)}
           onToggleExpand={handleToggleExpand}
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}

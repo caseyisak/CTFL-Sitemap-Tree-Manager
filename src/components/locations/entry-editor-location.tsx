@@ -134,6 +134,8 @@ export function EntryEditorLocation() {
     try {
       // ── 1. Resolve the root Sitemap entry ──
       let resolvedSitemapEntryId: string | null = null
+      // Track the resolved sitemap CT ID so we can exclude it from page entries below.
+      let resolvedSitemapCtId: string | null = installation?.sitemapContentTypeId ?? null
 
       try {
         let ctIdToQuery = installation?.sitemapContentTypeId ?? null
@@ -143,7 +145,10 @@ export function EntryEditorLocation() {
             (ctResp.items ?? []).find((ct) => ct.sys.id === "sitemap") ??
             (ctResp.items ?? []).find((ct) => ct.name.toLowerCase() === "sitemap")
           ctIdToQuery = sitemapCt?.sys.id ?? null
-          if (ctIdToQuery) setDetectedSitemapCtId(ctIdToQuery)
+          if (ctIdToQuery) {
+            setDetectedSitemapCtId(ctIdToQuery)
+            resolvedSitemapCtId = ctIdToQuery
+          }
         }
         if (ctIdToQuery) {
           // Find root entry: sitemapType = "root" or null (legacy)
@@ -197,6 +202,7 @@ export function EntryEditorLocation() {
 
       // ── 3. Fetch page entries ──
       const allEntries: ContentfulPageEntry[] = []
+
       const typesToFetch = isSitemapEntry
         ? enabledContentTypes
         : enabledContentTypes.filter((ct) => ct === sdk.ids.contentType)
@@ -204,6 +210,9 @@ export function EntryEditorLocation() {
       const fetchTypes = typesToFetch.length > 0 ? typesToFetch : enabledContentTypes
 
       for (const ctId of fetchTypes) {
+        // Never treat Sitemap CT entries as page tree nodes
+        if (resolvedSitemapCtId && ctId === resolvedSitemapCtId) continue
+
         const slugFieldId = contentTypeConfigs[ctId]?.slugFieldId ?? "slug"
         let titleFieldId = "title"
         try {
@@ -219,6 +228,11 @@ export function EntryEditorLocation() {
           })
           const items = response.items ?? []
           for (const item of items) {
+            // Extra safety: filter out any entry whose content type is the sitemap CT
+            if (
+              resolvedSitemapCtId &&
+              (item as { sys: { contentType?: { sys?: { id?: string } } } }).sys?.contentType?.sys?.id === resolvedSitemapCtId
+            ) continue
             allEntries.push(transformEntry(item, ctId, slugFieldId, titleFieldId))
           }
           if (items.length < limit) break
@@ -633,6 +647,11 @@ export function EntryEditorLocation() {
       }
       try {
         const entry = await sdk.cma.entry.get({ entryId: nodeId })
+        const ctId = entry.sys.contentType?.sys?.id ?? ""
+        const hasField = await sdk.cma.contentType
+          .get({ contentTypeId: ctId })
+          .then((ct) => ct.fields.some((f) => f.id === "excludeFromSitemap"), () => false)
+        if (!hasField) return
         await sdk.cma.entry.update(
           { entryId: nodeId },
           { ...entry, fields: { ...entry.fields, excludeFromSitemap: { "en-US": excluded } } }
