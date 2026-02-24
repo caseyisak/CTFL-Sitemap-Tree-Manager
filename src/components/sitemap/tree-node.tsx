@@ -13,7 +13,6 @@ import {
   FolderOpen,
   GripVertical,
   MoreHorizontal,
-  Plus,
   Edit3,
   Trash2,
   Copy,
@@ -281,10 +280,6 @@ export function TreeNode({
           <DropdownMenuContent align="end" className="w-48">
             {canHaveChildren && (
               <>
-                <DropdownMenuItem onClick={() => onAddChild(node.id, "page")}>
-                  <FileText className="mr-2 h-4 w-4" />
-                  Add child page
-                </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => onAddChild(node.id, "section")}>
                   <Folder className="mr-2 h-4 w-4" />
                   Add folder

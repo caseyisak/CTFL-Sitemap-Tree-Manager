@@ -3,19 +3,24 @@
 import { useEffect, useState, useCallback } from "react"
 import { useSDK, useAutoResizer } from "@contentful/react-apps-toolkit"
 import type { FieldAppSDK } from "@contentful/app-sdk"
-import type { AppInstallationParameters, SitemapMetadata } from "@/lib/contentful-types"
+import type { AppInstallationParameters, FolderNode, SitemapMetadata } from "@/lib/contentful-types"
 import { slugify } from "@/lib/sitemap-utils"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Globe, Folder, X, Home, ChevronDown, ChevronUp } from "lucide-react"
+import { Globe, Folder, X, Home, ChevronDown, ChevronUp, Check } from "lucide-react"
 
 interface ParentEntry {
   id: string
   title: string
   slug: string | null
+  isFolder: boolean
 }
+
+/** Read en-US locale value from a CMA field (typed as unknown). */
+const loc = (field: unknown): unknown =>
+  (field as Record<string, unknown> | undefined)?.["en-US"]
 
 export function EntryFieldLocation() {
   const sdk = useSDK<FieldAppSDK>()
@@ -33,14 +38,67 @@ export function EntryFieldLocation() {
   const [folderListOpen, setFolderListOpen] = useState(false)
   const [folderSearch, setFolderSearch] = useState("")
 
-  // Fetch entries for parent selection
+  /**
+   * Fetch:
+   *  1. FolderNode[] from the root Sitemap entry's `folderConfig` field
+   *  2. Page entries from enabled content types (for parent selection)
+   * Combines both into the `allEntries` picker list.
+   */
   const fetchAllEntries = useCallback(async () => {
     if (isMetadataField) return
-    const enabledTypes = installation?.enabledContentTypes ?? []
-    if (enabledTypes.length === 0) return
 
     try {
       const results: ParentEntry[] = []
+
+      // ── 1. Fetch folders from root Sitemap entry ──
+      let sitemapCtId = installation?.sitemapContentTypeId ?? null
+      if (!sitemapCtId) {
+        try {
+          const ctResp = await sdk.cma.contentType.getMany({ query: { limit: 200 } })
+          const sitemapCt =
+            (ctResp.items ?? []).find((ct) => ct.sys.id === "sitemap") ??
+            (ctResp.items ?? []).find((ct) => ct.name.toLowerCase() === "sitemap")
+          sitemapCtId = sitemapCt?.sys.id ?? null
+        } catch { /* CT lookup failed — skip folders */ }
+      }
+
+      if (sitemapCtId) {
+        try {
+          const resp = await sdk.cma.entry.getMany({
+            query: { content_type: sitemapCtId, limit: 10 },
+          })
+          const items = resp.items ?? []
+
+          const rootItem =
+            items.find((e) => {
+              const t = loc((e.fields as Record<string, unknown>)?.sitemapType) as string | null | undefined
+              return t === "root"
+            }) ??
+            items.find((e) => {
+              const t = loc((e.fields as Record<string, unknown>)?.sitemapType) as string | null | undefined
+              return t == null
+            }) ??
+            items[0] ??
+            null
+
+          if (rootItem) {
+            const raw = loc((rootItem.fields as Record<string, unknown>)?.folderConfig)
+            if (Array.isArray(raw)) {
+              for (const folder of raw as FolderNode[]) {
+                results.push({
+                  id: folder.id,
+                  title: folder.title,
+                  slug: folder.slug ?? null,
+                  isFolder: true,
+                })
+              }
+            }
+          }
+        } catch { /* no sitemap entry yet */ }
+      }
+
+      // ── 2. Fetch page entries from enabled content types ──
+      const enabledTypes = installation?.enabledContentTypes ?? []
       for (const ctId of enabledTypes) {
         const response = await sdk.cma.entry.getMany({
           query: {
@@ -49,29 +107,29 @@ export function EntryFieldLocation() {
             "sys.id[ne]": sdk.entry.getSys().id,
           },
         })
+
+        const configs = installation?.contentTypeConfigs ?? {}
+        const slugFieldId = configs[ctId]?.slugFieldId ?? "slug"
+
+        let titleFieldId = "title"
+        try {
+          const ctDef = await sdk.cma.contentType.get({ contentTypeId: ctId })
+          titleFieldId = ctDef.displayField ?? "title"
+        } catch { /* fall back to "title" */ }
+
         for (const item of response.items ?? []) {
-          const fields = item.fields ?? {}
-          const titleField = fields["title"]
+          const fields = item.fields as Record<string, unknown>
+          const titleRaw = loc(fields[titleFieldId]) ?? loc(fields["title"])
           const title =
-            typeof titleField === "string"
-              ? titleField
-              : typeof titleField?.["en-US"] === "string"
-                ? titleField["en-US"]
-                : item.sys.id
+            typeof titleRaw === "string" ? titleRaw : item.sys.id
 
-          const configs = installation?.contentTypeConfigs ?? {}
-          const slugFieldId = configs[ctId]?.slugFieldId ?? "slug"
-          const slugField = fields[slugFieldId]
-          const slug =
-            typeof slugField === "string"
-              ? slugField
-              : typeof slugField?.["en-US"] === "string"
-                ? slugField["en-US"]
-                : null
+          const slugRaw = loc(fields[slugFieldId])
+          const entrySlug = typeof slugRaw === "string" ? slugRaw : null
 
-          results.push({ id: item.sys.id, title, slug })
+          results.push({ id: item.sys.id, title, slug: entrySlug, isFolder: false })
         }
       }
+
       setAllEntries(results)
 
       // Resolve current parent entry
@@ -196,6 +254,8 @@ export function EntryFieldLocation() {
       )
     : allEntries
 
+  const currentParentId = metadata?.parentEntryId ?? null
+
   return (
     <div className="p-3 space-y-4">
       {/* URL Slug */}
@@ -260,7 +320,7 @@ export function EntryFieldLocation() {
                   autoFocus
                   value={folderSearch}
                   onChange={(e) => setFolderSearch(e.target.value)}
-                  placeholder="Search entries..."
+                  placeholder="Search folders and pages..."
                   className="h-7 text-xs"
                 />
               </div>
@@ -270,29 +330,45 @@ export function EntryFieldLocation() {
                 <button
                   type="button"
                   onClick={() => handleSetParent(null)}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-[var(--cf-gray-50)] transition-colors"
+                  className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-[var(--cf-gray-50)] transition-colors ${
+                    currentParentId === null ? "bg-[var(--cf-blue-50)]" : ""
+                  }`}
                 >
                   <Home className="h-4 w-4 text-[var(--cf-gray-500)]" />
-                  <span>Root (top level)</span>
+                  <span className={currentParentId === null ? "font-medium" : ""}>Root (top level)</span>
+                  {currentParentId === null && (
+                    <Check className="h-3.5 w-3.5 ml-auto text-[var(--cf-blue-500)]" />
+                  )}
                 </button>
-                {filteredEntries.map((entry) => (
-                  <button
-                    key={entry.id}
-                    type="button"
-                    onClick={() => handleSetParent(entry.id)}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-[var(--cf-gray-50)] transition-colors"
-                  >
-                    <Folder className="h-4 w-4 shrink-0 text-[var(--cf-blue-500)]" />
-                    <span className="flex-1 truncate text-[var(--cf-gray-700)]">{entry.title}</span>
-                    {entry.slug && (
-                      <span className="text-xs text-[var(--cf-gray-400)] font-mono shrink-0">
-                        /{entry.slug}
+                {filteredEntries.map((entry) => {
+                  const isCurrent = currentParentId === entry.id
+                  return (
+                    <button
+                      key={entry.id}
+                      type="button"
+                      title={entry.id}
+                      onClick={() => handleSetParent(entry.id)}
+                      className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-[var(--cf-gray-50)] transition-colors ${
+                        isCurrent ? "bg-[var(--cf-blue-50)]" : ""
+                      }`}
+                    >
+                      <Folder className={`h-4 w-4 shrink-0 ${entry.isFolder ? "text-[var(--cf-blue-500)]" : "text-[var(--cf-gray-400)]"}`} />
+                      <span className={`flex-1 truncate ${isCurrent ? "font-medium text-[var(--cf-gray-900)]" : "text-[var(--cf-gray-700)]"}`}>
+                        {entry.title}
                       </span>
-                    )}
-                  </button>
-                ))}
+                      {isCurrent && (
+                        <Check className="h-3.5 w-3.5 shrink-0 text-[var(--cf-blue-500)]" />
+                      )}
+                      {!isCurrent && entry.slug && (
+                        <span className="text-xs text-[var(--cf-gray-400)] font-mono shrink-0">
+                          /{entry.slug}
+                        </span>
+                      )}
+                    </button>
+                  )
+                })}
                 {filteredEntries.length === 0 && (
-                  <p className="px-3 py-3 text-xs text-[var(--cf-gray-400)] italic">No entries found.</p>
+                  <p className="px-3 py-3 text-xs text-[var(--cf-gray-400)] italic">No folders or pages found.</p>
                 )}
               </div>
             </div>

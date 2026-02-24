@@ -66,6 +66,10 @@ export function SitemapPanelWithCallback({
   const [showAddFolderDialog, setShowAddFolderDialog] = useState(false)
   const [addParentId, setAddParentId] = useState<string | null>(null)
   const [newFolderTitle, setNewFolderTitle] = useState("")
+  const [deleteConfirmNodeId, setDeleteConfirmNodeId] = useState<string | null>(null)
+  const [deleteConfirmTitle, setDeleteConfirmTitle] = useState("")
+  const [renameNodeId, setRenameNodeId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState("")
   const [history, setHistory] = useState<SitemapNode[]>([sitemap])
   const [historyIndex, setHistoryIndex] = useState(0)
   const [showExcluded, setShowExcluded] = useState(false)
@@ -374,57 +378,80 @@ export function SitemapPanelWithCallback({
   const handleDelete = useCallback(
     (nodeId: string) => {
       if (nodeId === "root") return
-      if (!confirm("Are you sure you want to delete this page and all its children?")) return
-
-      if (onDeleteEntry) {
-        onDeleteEntry(nodeId).catch(console.error)
-        setSelectedNodeIds((prev) => {
-          const next = new Set(prev)
-          next.delete(nodeId)
-          return next
-        })
-        return
+      const findTitle = (node: SitemapNode): string | null => {
+        if (node.id === nodeId) return node.title
+        for (const child of node.children) { const t = findTitle(child); if (t) return t }
+        return null
       }
+      setDeleteConfirmTitle(findTitle(sitemap) ?? "this item")
+      setDeleteConfirmNodeId(nodeId)
+    },
+    [sitemap]
+  )
 
-      const newSitemap = JSON.parse(JSON.stringify(sitemap)) as SitemapNode
-      const deleteNode = (node: SitemapNode): boolean => {
-        const index = node.children.findIndex((c) => c.id === nodeId)
-        if (index !== -1) { node.children.splice(index, 1); return true }
-        return node.children.some(deleteNode)
-      }
-      deleteNode(newSitemap)
-      onSitemapChange(newSitemap)
-      updateHistory(newSitemap)
+  const handleConfirmDelete = useCallback(() => {
+    const nodeId = deleteConfirmNodeId
+    if (!nodeId) return
+    setDeleteConfirmNodeId(null)
+
+    if (onDeleteEntry) {
+      onDeleteEntry(nodeId).catch(console.error)
       setSelectedNodeIds((prev) => {
         const next = new Set(prev)
         next.delete(nodeId)
         return next
       })
-    },
-    [sitemap, onSitemapChange, onDeleteEntry]
-  )
+      return
+    }
+
+    const newSitemap = JSON.parse(JSON.stringify(sitemap)) as SitemapNode
+    const deleteNode = (node: SitemapNode): boolean => {
+      const index = node.children.findIndex((c) => c.id === nodeId)
+      if (index !== -1) { node.children.splice(index, 1); return true }
+      return node.children.some(deleteNode)
+    }
+    deleteNode(newSitemap)
+    onSitemapChange(newSitemap)
+    updateHistory(newSitemap)
+    setSelectedNodeIds((prev) => {
+      const next = new Set(prev)
+      next.delete(nodeId)
+      return next
+    })
+  }, [deleteConfirmNodeId, sitemap, onSitemapChange, onDeleteEntry])
 
   const handleRename = useCallback(
     (nodeId: string) => {
-      const newTitle = prompt("Enter new title:")
-      if (!newTitle?.trim()) return
-
-      if (onRenameEntry) {
-        onRenameEntry(nodeId, newTitle).catch(console.error)
-        return
+      const findTitle = (node: SitemapNode): string | null => {
+        if (node.id === nodeId) return node.title
+        for (const child of node.children) { const t = findTitle(child); if (t) return t }
+        return null
       }
-
-      const newSitemap = JSON.parse(JSON.stringify(sitemap)) as SitemapNode
-      const renameNode = (node: SitemapNode): boolean => {
-        if (node.id === nodeId) { node.title = newTitle; return true }
-        return node.children.some(renameNode)
-      }
-      renameNode(newSitemap)
-      onSitemapChange(newSitemap)
-      updateHistory(newSitemap)
+      setRenameValue(findTitle(sitemap) ?? "")
+      setRenameNodeId(nodeId)
     },
-    [sitemap, onSitemapChange, onRenameEntry]
+    [sitemap]
   )
+
+  const handleConfirmRename = useCallback(() => {
+    const nodeId = renameNodeId
+    if (!nodeId || !renameValue.trim()) return
+    setRenameNodeId(null)
+
+    if (onRenameEntry) {
+      onRenameEntry(nodeId, renameValue).catch(console.error)
+      return
+    }
+
+    const newSitemap = JSON.parse(JSON.stringify(sitemap)) as SitemapNode
+    const renameNode = (node: SitemapNode): boolean => {
+      if (node.id === nodeId) { node.title = renameValue; return true }
+      return node.children.some(renameNode)
+    }
+    renameNode(newSitemap)
+    onSitemapChange(newSitemap)
+    updateHistory(newSitemap)
+  }, [renameNodeId, renameValue, sitemap, onSitemapChange, onRenameEntry])
 
   const handleDuplicate = useCallback(
     (nodeId: string) => {
@@ -724,6 +751,43 @@ export function SitemapPanelWithCallback({
             >
               {creatingFolder ? "Creating…" : "Add folder"}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete confirmation dialog */}
+      <Dialog open={!!deleteConfirmNodeId} onOpenChange={(open) => !open && setDeleteConfirmNodeId(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete &quot;{deleteConfirmTitle}&quot;?</DialogTitle>
+            <DialogDescription>
+              This will delete this item and all its children. This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteConfirmNodeId(null)} className="bg-transparent">Cancel</Button>
+            <Button onClick={handleConfirmDelete} className="bg-[var(--cf-red-500)] hover:bg-[var(--cf-red-600)] text-white">Delete</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Rename dialog */}
+      <Dialog open={!!renameNodeId} onOpenChange={(open) => !open && setRenameNodeId(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Rename</DialogTitle>
+          </DialogHeader>
+          <div className="py-4">
+            <Input
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") handleConfirmRename() }}
+              autoFocus
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRenameNodeId(null)} className="bg-transparent">Cancel</Button>
+            <Button onClick={handleConfirmRename} disabled={!renameValue.trim()} className="bg-[var(--cf-blue-500)] hover:bg-[var(--cf-blue-600)]">Rename</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
