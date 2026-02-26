@@ -7,6 +7,8 @@ export interface SitemapNode {
   children: SitemapNode[]
   isExpanded?: boolean
   excludeFromSitemap?: boolean
+  /** Content type ID for page nodes; undefined for root/section nodes */
+  contentType?: string
 }
 
 export interface DragState {
