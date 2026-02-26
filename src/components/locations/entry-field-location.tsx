@@ -3,31 +3,47 @@
 import { useEffect, useState, useCallback } from "react"
 import { useSDK, useAutoResizer } from "@contentful/react-apps-toolkit"
 import type { FieldAppSDK } from "@contentful/app-sdk"
-import type { AppInstallationParameters, SitemapMetadata } from "@/lib/contentful-types"
+import type { AppInstallationParameters, FolderNode, SitemapMetadata } from "@/lib/contentful-types"
 import { slugify } from "@/lib/sitemap-utils"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover"
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "@/components/ui/command"
-import { Globe, Folder, X, Home } from "lucide-react"
+import { Globe, Folder, X, Home, ChevronDown, ChevronUp } from "lucide-react"
 
 interface ParentEntry {
   id: string
   title: string
   slug: string | null
+  isFolder: boolean
+  parentId: string | null
+}
+
+/** Read en-US locale value from a CMA field (typed as unknown). */
+const loc = (field: unknown): unknown =>
+  (field as Record<string, unknown> | undefined)?.["en-US"]
+
+/** Walk up the folder hierarchy to build an ordered chain from root to immediate parent. */
+function buildParentChain(folders: ParentEntry[], immediateParentId: string | null): ParentEntry[] {
+  if (!immediateParentId) return []
+  const chain: ParentEntry[] = []
+  let currentId: string | null = immediateParentId
+  const visited = new Set<string>()
+  while (currentId) {
+    if (visited.has(currentId)) break
+    visited.add(currentId)
+    const folder = folders.find((f) => f.id === currentId)
+    if (!folder) break
+    chain.unshift(folder)
+    currentId = folder.parentId
+  }
+  return chain
+}
+
+/** Compute the full URL slug path from an ancestor chain + own slug. */
+function computeFullSlugPath(chain: ParentEntry[], slug: string): string {
+  const parts = [...chain.map((f) => f.slug).filter((s): s is string => Boolean(s)), slug].filter(Boolean)
+  return parts.length ? `/${parts.join("/")}` : `/${slug}`
 }
 
 export function EntryFieldLocation() {
@@ -41,61 +57,73 @@ export function EntryFieldLocation() {
   // All hooks must be called unconditionally — no early returns before this line
   const [slug, setSlug] = useState<string>("")
   const [metadata, setMetadata] = useState<SitemapMetadata | null>(null)
-  const [parentEntry, setParentEntry] = useState<ParentEntry | null>(null)
   const [allEntries, setAllEntries] = useState<ParentEntry[]>([])
-  const [popoverOpen, setPopoverOpen] = useState(false)
+  const [folderListOpen, setFolderListOpen] = useState(false)
+  const [folderSearch, setFolderSearch] = useState("")
 
-  // Fetch entries for parent selection
+  /**
+   * Fetch FolderNode[] from the root Sitemap entry's `folderConfig` field.
+   * Only folders are shown in the "Move to folder" picker — page entries are excluded.
+   */
   const fetchAllEntries = useCallback(async () => {
     if (isMetadataField) return
-    const enabledTypes = installation?.enabledContentTypes ?? []
-    if (enabledTypes.length === 0) return
 
     try {
       const results: ParentEntry[] = []
-      for (const ctId of enabledTypes) {
-        const response = await sdk.cma.entry.getMany({
-          query: {
-            content_type: ctId,
-            limit: 200,
-            "sys.id[ne]": sdk.entry.getSys().id,
-          },
-        })
-        for (const item of response.items ?? []) {
-          const fields = item.fields ?? {}
-          const titleField = fields["title"]
-          const title =
-            typeof titleField === "string"
-              ? titleField
-              : typeof titleField?.["en-US"] === "string"
-                ? titleField["en-US"]
-                : item.sys.id
 
-          const configs = installation?.contentTypeConfigs ?? {}
-          const slugFieldId = configs[ctId]?.slugFieldId ?? "slug"
-          const slugField = fields[slugFieldId]
-          const slug =
-            typeof slugField === "string"
-              ? slugField
-              : typeof slugField?.["en-US"] === "string"
-                ? slugField["en-US"]
-                : null
-
-          results.push({ id: item.sys.id, title, slug })
-        }
+      // ── 1. Fetch folders from root Sitemap entry ──
+      let sitemapCtId = installation?.sitemapContentTypeId ?? null
+      if (!sitemapCtId) {
+        try {
+          const ctResp = await sdk.cma.contentType.getMany({ query: { limit: 200 } })
+          const sitemapCt =
+            (ctResp.items ?? []).find((ct) => ct.sys.id === "sitemap") ??
+            (ctResp.items ?? []).find((ct) => ct.name.toLowerCase() === "sitemap")
+          sitemapCtId = sitemapCt?.sys.id ?? null
+        } catch { /* CT lookup failed — skip folders */ }
       }
+
+      if (sitemapCtId) {
+        try {
+          const resp = await sdk.cma.entry.getMany({
+            query: { content_type: sitemapCtId, limit: 10 },
+          })
+          const items = resp.items ?? []
+
+          const rootItem =
+            items.find((e) => {
+              const t = loc((e.fields as Record<string, unknown>)?.sitemapType) as string | null | undefined
+              return t === "root"
+            }) ??
+            items.find((e) => {
+              const t = loc((e.fields as Record<string, unknown>)?.sitemapType) as string | null | undefined
+              return t == null
+            }) ??
+            items[0] ??
+            null
+
+          if (rootItem) {
+            const raw = loc((rootItem.fields as Record<string, unknown>)?.folderConfig)
+            if (Array.isArray(raw)) {
+              for (const folder of raw as FolderNode[]) {
+                results.push({
+                  id: folder.id,
+                  title: folder.title,
+                  slug: folder.slug ?? null,
+                  isFolder: true,
+                  parentId: folder.parentId ?? null,
+                })
+              }
+            }
+          }
+        } catch { /* no sitemap entry yet */ }
+      }
+
       setAllEntries(results)
-
-      // Resolve current parent entry
-      const parentId = metadata?.parentEntryId
-      if (parentId) {
-        const parent = results.find((e) => e.id === parentId)
-        setParentEntry(parent ?? null)
-      }
     } catch (e) {
       console.error("Failed to fetch entries for parent picker:", e)
     }
-  }, [sdk, installation, metadata?.parentEntryId, isMetadataField])
+  }, [sdk, installation, isMetadataField])
 
   useEffect(() => {
     if (isMetadataField) return
@@ -140,16 +168,6 @@ export function EntryFieldLocation() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMetadataField])
 
-  // Resolve parent label when metadata changes
-  useEffect(() => {
-    if (metadata?.parentEntryId && allEntries.length > 0) {
-      const parent = allEntries.find((e) => e.id === metadata.parentEntryId)
-      setParentEntry(parent ?? null)
-    } else {
-      setParentEntry(null)
-    }
-  }, [metadata?.parentEntryId, allEntries])
-
   // Gracefully handle the sitemapMetadata JSON field
   if (isMetadataField) {
     return (
@@ -172,32 +190,41 @@ export function EntryFieldLocation() {
     if (metadataField) {
       const existingMeta = metadataField.getValue() as SitemapMetadata | undefined
       const parentId = existingMeta?.parentEntryId ?? null
+      const chain = buildParentChain(allEntries, parentId)
       await metadataField.setValue({
         parentEntryId: parentId,
-        computedPath: parentId
-          ? `${parentEntry?.slug ? `/${parentEntry.slug}` : ""}/${newSlug}`
-          : `/${newSlug}`,
+        computedPath: computeFullSlugPath(chain, newSlug),
       } satisfies SitemapMetadata)
     }
   }
 
   const handleSetParent = async (parentId: string | null) => {
-    const parent = parentId ? allEntries.find((e) => e.id === parentId) ?? null : null
-    setParentEntry(parent)
-
     const metadataField = sdk.entry.fields["sitemapMetadata"]
     if (metadataField) {
+      const chain = buildParentChain(allEntries, parentId)
       const newMeta: SitemapMetadata = {
         parentEntryId: parentId,
-        computedPath: parentId
-          ? `/${parent?.slug ?? ""}/${slug}`
-          : `/${slug}`,
+        computedPath: computeFullSlugPath(chain, slug),
       }
       await metadataField.setValue(newMeta)
       setMetadata(newMeta)
     }
-    setPopoverOpen(false)
+    setFolderListOpen(false)
+    setFolderSearch("")
   }
+
+  // Derive the full ancestor chain for badge display and URL computation
+  const parentChain = buildParentChain(allEntries, metadata?.parentEntryId ?? null)
+
+  const filteredEntries = folderSearch.trim()
+    ? allEntries.filter(
+        (e) =>
+          e.title.toLowerCase().includes(folderSearch.toLowerCase()) ||
+          (e.slug ?? "").toLowerCase().includes(folderSearch.toLowerCase())
+      )
+    : allEntries
+
+  const currentParentId = metadata?.parentEntryId ?? null
 
   return (
     <div className="p-3 space-y-4">
@@ -205,27 +232,29 @@ export function EntryFieldLocation() {
       <div className="space-y-2">
         <Label className="text-sm text-[var(--cf-gray-600)]">URL Slug</Label>
         <div className="flex items-center gap-1 p-2 border border-[var(--cf-gray-300)] rounded-md bg-white min-h-[36px] flex-wrap">
-          {/* Parent badge */}
-          {parentEntry && (
-            <span className="flex items-center gap-1">
+          {/* Parent chain badges — one per ancestor folder */}
+          {parentChain.map((folder, i) => (
+            <span key={folder.id} className="flex items-center gap-1">
               <Badge
                 variant="secondary"
                 className="bg-[var(--cf-blue-100)] text-[var(--cf-blue-600)] hover:bg-[var(--cf-blue-200)] px-2 py-0.5 text-xs font-mono flex items-center gap-1 shrink-0"
               >
                 <Folder className="h-3 w-3" />
-                {parentEntry.slug ?? parentEntry.title}
-                <button
-                  type="button"
-                  onClick={() => handleSetParent(null)}
-                  className="ml-0.5 rounded-full hover:bg-[var(--cf-blue-300)] p-0.5 transition-colors"
-                  aria-label="Remove parent"
-                >
-                  <X className="h-2.5 w-2.5" />
-                </button>
+                {folder.title}
+                {i === parentChain.length - 1 && (
+                  <button
+                    type="button"
+                    onClick={() => handleSetParent(null)}
+                    className="ml-0.5 rounded-full hover:bg-[var(--cf-blue-300)] p-0.5 transition-colors"
+                    aria-label="Remove parent"
+                  >
+                    <X className="h-2.5 w-2.5" />
+                  </button>
+                )}
               </Badge>
               <span className="text-[var(--cf-gray-400)] text-sm font-mono">/</span>
             </span>
-          )}
+          ))}
           {/* Editable slug */}
           <Input
             value={slug}
@@ -235,51 +264,95 @@ export function EntryFieldLocation() {
           />
         </div>
 
-        {/* Move to folder */}
-        <Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
-          <PopoverTrigger asChild>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 px-2 text-xs text-[var(--cf-gray-500)] hover:text-[var(--cf-gray-700)]"
-            >
-              <Folder className="h-3 w-3 mr-1" />
-              Move to folder...
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent className="w-64 p-0" align="start">
-            <Command>
-              <CommandInput placeholder="Search entries..." />
-              <CommandList>
-                <CommandEmpty>No entries found.</CommandEmpty>
-                <CommandGroup>
-                  <CommandItem
-                    onSelect={() => handleSetParent(null)}
-                    className="flex items-center gap-2"
-                  >
-                    <Home className="h-4 w-4 text-[var(--cf-gray-500)]" />
-                    <span>Root (top level)</span>
-                  </CommandItem>
-                  {allEntries.map((entry) => (
-                    <CommandItem
+        {/* Move to folder — inline collapsible (no floating popover) */}
+        <div>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 px-2 text-xs text-[var(--cf-gray-500)] hover:text-[var(--cf-gray-700)]"
+            onClick={() => {
+              const opening = !folderListOpen
+              setFolderListOpen(opening)
+              setFolderSearch("")
+              // Re-fetch on every open so renamed/deleted folders are always fresh
+              if (opening) fetchAllEntries()
+            }}
+          >
+            <Folder className="h-3 w-3 mr-1" />
+            Move to folder...
+            {folderListOpen ? (
+              <ChevronUp className="h-3 w-3 ml-1" />
+            ) : (
+              <ChevronDown className="h-3 w-3 ml-1" />
+            )}
+          </Button>
+
+          {folderListOpen && (
+            <div className="mt-1 border border-[var(--cf-gray-200)] rounded-md bg-white overflow-hidden">
+              {/* Search */}
+              <div className="p-2 border-b border-[var(--cf-gray-100)]">
+                <Input
+                  autoFocus
+                  value={folderSearch}
+                  onChange={(e) => setFolderSearch(e.target.value)}
+                  placeholder="Search folders..."
+                  className="h-7 text-xs"
+                />
+              </div>
+              {/* List — no max-height, let autoResizer expand iframe */}
+              <div>
+                {/* Root option */}
+                <button
+                  type="button"
+                  onClick={() => handleSetParent(null)}
+                  className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-[var(--cf-gray-50)] transition-colors ${
+                    currentParentId === null ? "bg-[var(--cf-blue-50)]" : ""
+                  }`}
+                >
+                  <Home className="h-4 w-4 text-[var(--cf-gray-500)]" />
+                  <span className={currentParentId === null ? "font-medium" : ""}>Root (top level)</span>
+                  {currentParentId === null && (
+                    <span className="ml-auto shrink-0 bg-[var(--cf-blue-500)] text-white text-[10px] font-medium px-1.5 py-0.5 rounded">
+                      Current
+                    </span>
+                  )}
+                </button>
+                {filteredEntries.map((entry) => {
+                  const isCurrent = currentParentId === entry.id
+                  return (
+                    <button
                       key={entry.id}
-                      onSelect={() => handleSetParent(entry.id)}
-                      className="flex items-center gap-2"
+                      type="button"
+                      title={`folder ID: ${entry.id}`}
+                      onClick={() => handleSetParent(entry.id)}
+                      className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-[var(--cf-gray-50)] transition-colors ${
+                        isCurrent ? "bg-[var(--cf-blue-50)]" : ""
+                      }`}
                     >
-                      <Folder className="h-4 w-4 text-[var(--cf-blue-500)]" />
-                      <span className="truncate">{entry.title}</span>
-                      {entry.slug && (
-                        <span className="text-xs text-[var(--cf-gray-400)] ml-auto font-mono shrink-0">
+                      <Folder className={`h-4 w-4 shrink-0 ${entry.isFolder ? "text-[var(--cf-blue-500)]" : "text-[var(--cf-gray-400)]"}`} />
+                      <span className={`flex-1 truncate ${isCurrent ? "font-medium text-[var(--cf-gray-900)]" : "text-[var(--cf-gray-700)]"}`}>
+                        {entry.title}
+                      </span>
+                      {isCurrent && (
+                        <span className="ml-auto shrink-0 bg-[var(--cf-blue-500)] text-white text-[10px] font-medium px-1.5 py-0.5 rounded">
+                          Current
+                        </span>
+                      )}
+                      {!isCurrent && entry.slug && (
+                        <span className="text-xs text-[var(--cf-gray-400)] font-mono shrink-0">
                           /{entry.slug}
                         </span>
                       )}
-                    </CommandItem>
-                  ))}
-                </CommandGroup>
-              </CommandList>
-            </Command>
-          </PopoverContent>
-        </Popover>
+                    </button>
+                  )
+                })}
+                {filteredEntries.length === 0 && (
+                  <p className="px-3 py-3 text-xs text-[var(--cf-gray-400)] italic">No folders found.</p>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Full URL Path */}

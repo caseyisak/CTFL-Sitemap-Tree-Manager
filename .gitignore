@@ -45,3 +45,5 @@ next-env.d.ts
 # Build artifacts / local dev
 build-plan.md
 certs/
+# SpecStory explanation file
+.specstory/.what-is-this.md

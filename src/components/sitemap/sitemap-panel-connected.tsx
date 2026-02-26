@@ -10,10 +10,7 @@ import {
   Search,
   ChevronDown,
   ChevronUp,
-  Settings,
   LayoutGrid,
-  Undo,
-  Redo,
   Folder
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -27,13 +24,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
 
 interface SitemapPanelProps {
@@ -41,6 +31,18 @@ interface SitemapPanelProps {
   sitemap: SitemapNode
   onSitemapChange: (sitemap: SitemapNode) => void
   currentPageId?: string
+  /** Actual name of the root Sitemap entry — shown as root node label in the tree */
+  sitemapName?: string
+  /** True when the currently-open Contentful entry is a child Sitemap (sitemapType = "child") */
+  isChildSitemap?: boolean
+  /** Content type IDs owned by this child sitemap */
+  childContentTypes?: string[]
+  /** All enabled content type IDs across the whole app */
+  allContentTypes?: string[]
+  /** Called when a greyed-out node's "Add to this sitemap" action is triggered */
+  onAddContentTypeToChild?: (ctId: string) => Promise<void>
+  /** Called when a member node's "Remove from this sitemap" action is triggered */
+  onRemoveContentTypeFromChild?: (ctId: string) => Promise<void>
   onRenameEntry?: (nodeId: string, newTitle: string) => Promise<void>
   onDuplicateEntry?: (nodeId: string) => Promise<void>
   onDeleteEntry?: (nodeId: string) => Promise<void>
@@ -49,8 +51,25 @@ interface SitemapPanelProps {
   onCreateFolder?: (parentId: string | null, title: string, slug: string) => Promise<SitemapNode>
 }
 
-export function SitemapPanelWithCallback({ onSelectNode, sitemap, onSitemapChange, currentPageId: currentPageIdProp, onRenameEntry, onDuplicateEntry, onDeleteEntry, onOpenEntryNewTab, onCreateFolder }: SitemapPanelProps) {
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+export function SitemapPanelWithCallback({
+  onSelectNode,
+  sitemap,
+  onSitemapChange,
+  currentPageId: currentPageIdProp,
+  sitemapName,
+  isChildSitemap,
+  childContentTypes,
+  allContentTypes,
+  onAddContentTypeToChild,
+  onRemoveContentTypeFromChild,
+  onRenameEntry,
+  onDuplicateEntry,
+  onDeleteEntry,
+  onOpenEntryNewTab,
+  onCreateFolder,
+}: SitemapPanelProps) {
+  const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set())
+  const [lastClickedNodeId, setLastClickedNodeId] = useState<string | null>(null)
   const [currentPageId] = useState<string>(currentPageIdProp ?? "my-tasks")
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(
     new Set(getAllExpandedIds(sitemap))
@@ -62,14 +81,20 @@ export function SitemapPanelWithCallback({ onSelectNode, sitemap, onSitemapChang
     dropPosition: null,
   })
   const [searchQuery, setSearchQuery] = useState("")
-  const [showAddDialog, setShowAddDialog] = useState(false)
+  const [showAddFolderDialog, setShowAddFolderDialog] = useState(false)
   const [addParentId, setAddParentId] = useState<string | null>(null)
-  const [newPageTitle, setNewPageTitle] = useState("")
-  const [newPageType, setNewPageType] = useState<"page" | "section">("page")
+  const [newFolderTitle, setNewFolderTitle] = useState("")
+  const [deleteConfirmNodeId, setDeleteConfirmNodeId] = useState<string | null>(null)
+  const [deleteConfirmTitle, setDeleteConfirmTitle] = useState("")
+  const [renameNodeId, setRenameNodeId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState("")
   const [history, setHistory] = useState<SitemapNode[]>([sitemap])
   const [historyIndex, setHistoryIndex] = useState(0)
   const [showExcluded, setShowExcluded] = useState(false)
   const [creatingFolder, setCreatingFolder] = useState(false)
+  const [allExpanded, setAllExpanded] = useState(false)
+  /** "this" = show only this child's CT entries; "full" = show all (with greyed-out non-members) */
+  const [scopeMode, setScopeMode] = useState<"this" | "full">("full")
 
   function getAllExpandedIds(node: SitemapNode): string[] {
     const ids: string[] = []
@@ -87,20 +112,6 @@ export function SitemapPanelWithCallback({ onSelectNode, sitemap, onSitemapChang
     setHistoryIndex(newHistory.length - 1)
   }
 
-  const undo = () => {
-    if (historyIndex > 0) {
-      setHistoryIndex(historyIndex - 1)
-      onSitemapChange(history[historyIndex - 1])
-    }
-  }
-
-  const redo = () => {
-    if (historyIndex < history.length - 1) {
-      setHistoryIndex(historyIndex + 1)
-      onSitemapChange(history[historyIndex + 1])
-    }
-  }
-
   const handleToggleExpand = useCallback((nodeId: string) => {
     setExpandedNodes((prev) => {
       const next = new Set(prev)
@@ -116,20 +127,63 @@ export function SitemapPanelWithCallback({ onSelectNode, sitemap, onSitemapChang
   const handleExpandAll = () => {
     const allIds = getAllNodeIds(sitemap)
     setExpandedNodes(new Set(allIds))
+    setAllExpanded(true)
   }
 
   const handleCollapseAll = () => {
     setExpandedNodes(new Set(["root"]))
+    setAllExpanded(false)
   }
 
   function getAllNodeIds(node: SitemapNode): string[] {
     return [node.id, ...node.children.flatMap(getAllNodeIds)]
   }
 
-  const handleSelect = useCallback((nodeId: string) => {
-    setSelectedNodeId(nodeId)
+  /** Flatten the visible tree into depth-first order (for shift-click range selection). */
+  function getVisibleNodeIds(node: SitemapNode, expanded: Set<string>): string[] {
+    const ids: string[] = [node.id]
+    if (expanded.has(node.id)) {
+      for (const child of node.children) {
+        ids.push(...getVisibleNodeIds(child, expanded))
+      }
+    }
+    return ids
+  }
+
+  const handleSelect = useCallback((nodeId: string, modifiers?: { shift?: boolean; meta?: boolean }) => {
+    if (modifiers?.meta) {
+      // Cmd/Ctrl+click — toggle individual node
+      setSelectedNodeIds((prev) => {
+        const next = new Set(prev)
+        if (next.has(nodeId)) {
+          next.delete(nodeId)
+        } else {
+          next.add(nodeId)
+        }
+        return next
+      })
+      setLastClickedNodeId(nodeId)
+    } else if (modifiers?.shift && lastClickedNodeId) {
+      // Shift+click — select range between lastClickedNodeId and nodeId
+      const visible = getVisibleNodeIds(
+        searchQuery ? filterNodes(sitemap, searchQuery) || sitemap : sitemap,
+        expandedNodes
+      )
+      const fromIdx = visible.indexOf(lastClickedNodeId)
+      const toIdx = visible.indexOf(nodeId)
+      if (fromIdx !== -1 && toIdx !== -1) {
+        const start = Math.min(fromIdx, toIdx)
+        const end = Math.max(fromIdx, toIdx)
+        const rangeIds = visible.slice(start, end + 1)
+        setSelectedNodeIds((prev) => new Set([...prev, ...rangeIds]))
+      }
+    } else {
+      // Plain click — clear set, select only this node
+      setSelectedNodeIds(new Set([nodeId]))
+      setLastClickedNodeId(nodeId)
+    }
     onSelectNode(nodeId)
-  }, [onSelectNode])
+  }, [onSelectNode, lastClickedNodeId, expandedNodes, searchQuery, sitemap])
 
   const handleDragStart = useCallback((nodeId: string) => {
     setDragState({
@@ -164,7 +218,6 @@ export function SitemapPanelWithCallback({ onSelectNode, sitemap, onSitemapChang
 
     const newSitemap = JSON.parse(JSON.stringify(sitemap)) as SitemapNode
 
-    // Helper function to find a node by ID
     const findNode = (node: SitemapNode, id: string): SitemapNode | null => {
       if (node.id === id) return node
       for (const child of node.children) {
@@ -173,32 +226,19 @@ export function SitemapPanelWithCallback({ onSelectNode, sitemap, onSitemapChang
       }
       return null
     }
-    
-    // Helper to extract just the page slug (last segment) from full path
+
     const extractPageSlug = (fullSlug: string): string => {
       const parts = fullSlug.split('/').filter(Boolean)
       return parts.length > 0 ? parts[parts.length - 1] : fullSlug
     }
-    
-    // Helper to find parent of a node
-    const findParent = (root: SitemapNode, targetId: string): SitemapNode | null => {
-      for (const child of root.children) {
-        if (child.id === targetId) return root
-        const found = findParent(child, targetId)
-        if (found) return found
-      }
-      return null
-    }
-    
+
     const targetNode = findNode(newSitemap, dragState.targetNodeId)
     const isTargetFolder = targetNode && (targetNode.type === "section" || targetNode.type === "root")
-    
-    // If dropping on a folder and position is "inside", nest inside it
-    const effectivePosition = isTargetFolder && dragState.dropPosition === "inside" 
-      ? "inside" 
+
+    const effectivePosition = isTargetFolder && dragState.dropPosition === "inside"
+      ? "inside"
       : dragState.dropPosition
 
-    // Find and remove the dragged node
     let draggedNode: SitemapNode | null = null
     const removeNode = (node: SitemapNode): boolean => {
       const index = node.children.findIndex((c) => c.id === dragState.draggedNodeId)
@@ -214,10 +254,8 @@ export function SitemapPanelWithCallback({ onSelectNode, sitemap, onSitemapChang
     if (!draggedNode) return
     const node = draggedNode as SitemapNode
 
-    // Clean up the slug - extract just the page's own slug (not the full path)
     node.slug = extractPageSlug(node.slug)
 
-    // Check for circular reference and max depth
     const getDepth = (node: SitemapNode, targetId: string, depth = 0): number => {
       if (node.id === targetId) return depth
       for (const child of node.children) {
@@ -232,15 +270,12 @@ export function SitemapPanelWithCallback({ onSelectNode, sitemap, onSitemapChang
       return 1 + Math.max(...node.children.map(getMaxChildDepth))
     }
 
-    // Insert the node at the new position
     let insertedSuccessfully = false
-    
+
     const insertNode = (parent: SitemapNode): boolean => {
-      // Check if the target is a direct child of this parent
       const targetIndex = parent.children.findIndex((c) => c.id === dragState.targetNodeId)
-      
+
       if (targetIndex !== -1) {
-        // Target is a direct child of this parent
         if (effectivePosition === "before") {
           parent.children.splice(targetIndex, 0, node)
           insertedSuccessfully = true
@@ -250,7 +285,6 @@ export function SitemapPanelWithCallback({ onSelectNode, sitemap, onSitemapChang
           insertedSuccessfully = true
           return true
         } else if (effectivePosition === "inside") {
-          // Insert inside the target node itself
           const targetNode = parent.children[targetIndex]
           const targetDepth = getDepth(newSitemap, targetNode.id)
           const draggedMaxDepth = getMaxChildDepth(node)
@@ -263,8 +297,7 @@ export function SitemapPanelWithCallback({ onSelectNode, sitemap, onSitemapChang
           return true
         }
       }
-      
-      // Check if this parent IS the target (for dropping inside root or when target is the parent itself)
+
       if (parent.id === dragState.targetNodeId && effectivePosition === "inside") {
         const targetDepth = getDepth(newSitemap, parent.id)
         const draggedMaxDepth = getMaxChildDepth(node)
@@ -277,59 +310,57 @@ export function SitemapPanelWithCallback({ onSelectNode, sitemap, onSitemapChang
         return true
       }
 
-      // Recursively search in children
       for (const child of parent.children) {
         if (insertNode(child)) {
           return true
         }
       }
-      
+
       return false
     }
 
     insertNode(newSitemap)
-    
+
     if (insertedSuccessfully) {
       onSitemapChange(newSitemap)
       updateHistory(newSitemap)
-      
-      // Auto-expand the target folder if we dropped inside it
+
       if (effectivePosition === "inside" && dragState.targetNodeId) {
         setExpandedNodes(prev => new Set([...prev, dragState.targetNodeId!]))
       }
     }
-    
+
     handleDragEnd()
   }, [dragState, sitemap, handleDragEnd, onSitemapChange])
 
-  const handleAddChild = useCallback((parentId: string, type: "page" | "section" = "page") => {
-    setAddParentId(parentId)
-    setNewPageTitle("")
-    setNewPageType(type)
-    setShowAddDialog(true)
+  /** Opens the "Add folder" dialog, optionally rooted at a specific parent. */
+  const handleOpenAddFolder = useCallback((parentId: string | null = null) => {
+    setAddParentId(parentId ?? "root")
+    setNewFolderTitle("")
+    setShowAddFolderDialog(true)
   }, [])
 
-  const handleConfirmAdd = async () => {
-    if (!addParentId || !newPageTitle.trim()) return
+  const handleConfirmAddFolder = async () => {
+    if (!newFolderTitle.trim()) return
 
-    const newSlug = newPageTitle.toLowerCase().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, "-")
+    const newSlug = newFolderTitle.toLowerCase().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, "-")
+    const parentId = addParentId === "root" ? null : addParentId
 
-    // Folders in the entry-editor context must become real CMA entries so they persist
-    if (newPageType === "section" && onCreateFolder) {
+    if (onCreateFolder) {
       setCreatingFolder(true)
       try {
-        const realParentId = addParentId === "root" ? null : addParentId
-        const newNode = await onCreateFolder(realParentId, newPageTitle, newSlug)
+        const newNode = await onCreateFolder(parentId, newFolderTitle, newSlug)
+        const targetParentId = addParentId ?? "root"
         const newSitemap = JSON.parse(JSON.stringify(sitemap)) as SitemapNode
         const addToParent = (node: SitemapNode): boolean => {
-          if (node.id === addParentId) { node.children.push(newNode); return true }
+          if (node.id === targetParentId) { node.children.push(newNode); return true }
           return node.children.some(addToParent)
         }
         addToParent(newSitemap)
         onSitemapChange(newSitemap)
         updateHistory(newSitemap)
-        setExpandedNodes((prev) => new Set([...prev, addParentId, newNode.id]))
-        setShowAddDialog(false)
+        setExpandedNodes((prev) => new Set([...prev, targetParentId, newNode.id]))
+        setShowAddFolderDialog(false)
       } catch (e) {
         console.error("Failed to create folder:", e)
       } finally {
@@ -338,15 +369,16 @@ export function SitemapPanelWithCallback({ onSelectNode, sitemap, onSitemapChang
       return
     }
 
-    // Local-only path (no CMA callback, or adding a page)
+    // Local-only path (no CMA callback)
     const newSitemap = JSON.parse(JSON.stringify(sitemap)) as SitemapNode
+    const targetParentId = addParentId ?? "root"
     const addToParent = (node: SitemapNode): boolean => {
-      if (node.id === addParentId) {
+      if (node.id === targetParentId) {
         const newNode: SitemapNode = {
           id: `${newSlug}-${Date.now()}`,
-          title: newPageTitle,
+          title: newFolderTitle,
           slug: newSlug,
-          type: newPageType,
+          type: "section",
           status: "draft",
           children: [],
           isExpanded: true,
@@ -359,67 +391,87 @@ export function SitemapPanelWithCallback({ onSelectNode, sitemap, onSitemapChang
     addToParent(newSitemap)
     onSitemapChange(newSitemap)
     updateHistory(newSitemap)
-    setExpandedNodes((prev) => {
-      const next = new Set([...prev, addParentId])
-      const findNewNode = (node: SitemapNode): string | null => {
-        const newChild = node.children.find(c => c.title === newPageTitle && c.type === newPageType)
-        if (newChild) return newChild.id
-        for (const child of node.children) { const found = findNewNode(child); if (found) return found }
-        return null
-      }
-      const actualId = findNewNode(newSitemap)
-      if (actualId) next.add(actualId)
-      return next
-    })
-    setShowAddDialog(false)
+    setExpandedNodes((prev) => new Set([...prev, targetParentId]))
+    setShowAddFolderDialog(false)
   }
 
   const handleDelete = useCallback(
     (nodeId: string) => {
       if (nodeId === "root") return
-      if (!confirm("Are you sure you want to delete this page and all its children?")) return
-
-      if (onDeleteEntry) {
-        onDeleteEntry(nodeId).catch(console.error)
-        if (selectedNodeId === nodeId) setSelectedNodeId(null)
-        return
+      const findTitle = (node: SitemapNode): string | null => {
+        if (node.id === nodeId) return node.title
+        for (const child of node.children) { const t = findTitle(child); if (t) return t }
+        return null
       }
-
-      const newSitemap = JSON.parse(JSON.stringify(sitemap)) as SitemapNode
-      const deleteNode = (node: SitemapNode): boolean => {
-        const index = node.children.findIndex((c) => c.id === nodeId)
-        if (index !== -1) { node.children.splice(index, 1); return true }
-        return node.children.some(deleteNode)
-      }
-      deleteNode(newSitemap)
-      onSitemapChange(newSitemap)
-      updateHistory(newSitemap)
-      if (selectedNodeId === nodeId) setSelectedNodeId(null)
+      setDeleteConfirmTitle(findTitle(sitemap) ?? "this item")
+      setDeleteConfirmNodeId(nodeId)
     },
-    [sitemap, selectedNodeId, onSitemapChange, onDeleteEntry]
+    [sitemap]
   )
+
+  const handleConfirmDelete = useCallback(() => {
+    const nodeId = deleteConfirmNodeId
+    if (!nodeId) return
+    setDeleteConfirmNodeId(null)
+
+    if (onDeleteEntry) {
+      onDeleteEntry(nodeId).catch(console.error)
+      setSelectedNodeIds((prev) => {
+        const next = new Set(prev)
+        next.delete(nodeId)
+        return next
+      })
+      return
+    }
+
+    const newSitemap = JSON.parse(JSON.stringify(sitemap)) as SitemapNode
+    const deleteNode = (node: SitemapNode): boolean => {
+      const index = node.children.findIndex((c) => c.id === nodeId)
+      if (index !== -1) { node.children.splice(index, 1); return true }
+      return node.children.some(deleteNode)
+    }
+    deleteNode(newSitemap)
+    onSitemapChange(newSitemap)
+    updateHistory(newSitemap)
+    setSelectedNodeIds((prev) => {
+      const next = new Set(prev)
+      next.delete(nodeId)
+      return next
+    })
+  }, [deleteConfirmNodeId, sitemap, onSitemapChange, onDeleteEntry])
 
   const handleRename = useCallback(
     (nodeId: string) => {
-      const newTitle = prompt("Enter new title:")
-      if (!newTitle?.trim()) return
-
-      if (onRenameEntry) {
-        onRenameEntry(nodeId, newTitle).catch(console.error)
-        return
+      const findTitle = (node: SitemapNode): string | null => {
+        if (node.id === nodeId) return node.title
+        for (const child of node.children) { const t = findTitle(child); if (t) return t }
+        return null
       }
-
-      const newSitemap = JSON.parse(JSON.stringify(sitemap)) as SitemapNode
-      const renameNode = (node: SitemapNode): boolean => {
-        if (node.id === nodeId) { node.title = newTitle; return true }
-        return node.children.some(renameNode)
-      }
-      renameNode(newSitemap)
-      onSitemapChange(newSitemap)
-      updateHistory(newSitemap)
+      setRenameValue(findTitle(sitemap) ?? "")
+      setRenameNodeId(nodeId)
     },
-    [sitemap, onSitemapChange, onRenameEntry]
+    [sitemap]
   )
+
+  const handleConfirmRename = useCallback(() => {
+    const nodeId = renameNodeId
+    if (!nodeId || !renameValue.trim()) return
+    setRenameNodeId(null)
+
+    if (onRenameEntry) {
+      onRenameEntry(nodeId, renameValue).catch(console.error)
+      return
+    }
+
+    const newSitemap = JSON.parse(JSON.stringify(sitemap)) as SitemapNode
+    const renameNode = (node: SitemapNode): boolean => {
+      if (node.id === nodeId) { node.title = renameValue; return true }
+      return node.children.some(renameNode)
+    }
+    renameNode(newSitemap)
+    onSitemapChange(newSitemap)
+    updateHistory(newSitemap)
+  }, [renameNodeId, renameValue, sitemap, onSitemapChange, onRenameEntry])
 
   const handleDuplicate = useCallback(
     (nodeId: string) => {
@@ -461,16 +513,11 @@ export function SitemapPanelWithCallback({ onSelectNode, sitemap, onSitemapChang
       .filter((child): child is SitemapNode => child !== null)
 
     if (matchesSearch || filteredChildren.length > 0) {
-      return {
-        ...node,
-        children: filteredChildren,
-        isExpanded: true,
-      }
+      return { ...node, children: filteredChildren, isExpanded: true }
     }
     return null
   }
 
-  // Filter to show only excluded nodes
   const filterExcluded = (node: SitemapNode): SitemapNode | null => {
     const filteredChildren = node.children
       .map((child) => filterExcluded(child))
@@ -481,13 +528,36 @@ export function SitemapPanelWithCallback({ onSelectNode, sitemap, onSitemapChang
     return null
   }
 
+  /** Returns true if a page node's content type is not in the child sitemap's owned CTs */
+  const isNodeOutOfScope = (node: SitemapNode): boolean => {
+    if (!isChildSitemap || !childContentTypes) return false
+    if (node.type !== "page") return false
+    if (!node.contentType) return false
+    return !childContentTypes.includes(node.contentType)
+  }
+
+  /** Filter tree to only nodes whose contentType is in childContentTypes (plus folders with matching descendants) */
+  const filterToScope = (node: SitemapNode): SitemapNode | null => {
+    if (node.type === "root" || node.type === "section") {
+      const filteredChildren = node.children
+        .map(filterToScope)
+        .filter((c): c is SitemapNode => c !== null)
+      if (filteredChildren.length > 0) return { ...node, children: filteredChildren, isExpanded: true }
+      return null
+    }
+    if (!node.contentType || !childContentTypes?.includes(node.contentType)) return null
+    return node
+  }
+
   const displayedSitemap = (() => {
     let result = searchQuery ? filterNodes(sitemap, searchQuery) || sitemap : sitemap
     if (showExcluded) result = filterExcluded(result) || result
+    if (isChildSitemap && scopeMode === "this" && childContentTypes) {
+      result = filterToScope(result) || result
+    }
     return result
   })()
 
-  // Get breadcrumb path for current page
   const getBreadcrumb = (
     node: SitemapNode,
     targetId: string,
@@ -503,7 +573,7 @@ export function SitemapPanelWithCallback({ onSelectNode, sitemap, onSitemapChang
 
   const currentBreadcrumb = currentPageId ? getBreadcrumb(sitemap, currentPageId) : null
 
-  // Count stats
+  // Count stats — "section" type is displayed as "folder"
   const countNodes = (node: SitemapNode): { pages: number; sections: number } => {
     let pages = node.type === "page" ? 1 : 0
     let sections = node.type === "section" ? 1 : 0
@@ -517,6 +587,15 @@ export function SitemapPanelWithCallback({ onSelectNode, sitemap, onSitemapChang
 
   const stats = countNodes(sitemap)
 
+  // Derive the single selected node ID for TreeNode highlighting compatibility
+  // (TreeNode takes a single selectedNodeId — highlight all selected nodes by
+  //  checking membership in selectedNodeIds)
+  const primarySelectedNodeId = lastClickedNodeId && selectedNodeIds.has(lastClickedNodeId)
+    ? lastClickedNodeId
+    : selectedNodeIds.size === 1
+      ? [...selectedNodeIds][0]
+      : null
+
   return (
     <div className="flex flex-col h-full bg-white rounded-lg shadow-sm border border-[var(--cf-gray-200)]">
       {/* Header */}
@@ -526,37 +605,12 @@ export function SitemapPanelWithCallback({ onSelectNode, sitemap, onSitemapChang
           <h2 className="text-lg font-semibold text-[var(--cf-gray-700)]">Sitemap</h2>
           <div className="flex items-center gap-1">
             <Badge variant="secondary" className="bg-[var(--cf-gray-100)] text-[var(--cf-gray-600)] text-xs">
-              {stats.sections} sections
+              {stats.sections} {stats.sections === 1 ? "folder" : "folders"}
             </Badge>
             <Badge variant="secondary" className="bg-[var(--cf-gray-100)] text-[var(--cf-gray-600)] text-xs">
               {stats.pages} pages
             </Badge>
           </div>
-        </div>
-        <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={undo}
-            disabled={historyIndex === 0}
-            className="h-8 w-8 p-0"
-            title="Undo"
-          >
-            <Undo className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={redo}
-            disabled={historyIndex === history.length - 1}
-            className="h-8 w-8 p-0"
-            title="Redo"
-          >
-            <Redo className="h-4 w-4" />
-          </Button>
-          <Button variant="ghost" size="sm" className="h-8 w-8 p-0" title="Settings">
-            <Settings className="h-4 w-4" />
-          </Button>
         </div>
       </div>
 
@@ -586,24 +640,86 @@ export function SitemapPanelWithCallback({ onSelectNode, sitemap, onSitemapChang
 
       {/* Toolbar */}
       <div className="p-3 border-b border-[var(--cf-gray-200)] bg-[var(--cf-gray-100)] space-y-2">
-        {/* Search bar - full width */}
-        <div className="flex items-center gap-2">
-          <div className="relative flex-1">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--cf-gray-400)]" />
-            <Input
-              type="text"
-              placeholder="Search pages..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-8 h-9 text-sm bg-white w-full"
-            />
+        {/* Row 1: Search bar — full width */}
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--cf-gray-400)]" />
+          <Input
+            type="text"
+            placeholder="Search pages..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-8 h-9 text-sm bg-white w-full"
+          />
+        </div>
+
+        {/* Child sitemap scope toggle */}
+        {isChildSitemap && (
+          <div className="flex items-center rounded-md border border-[var(--cf-gray-200)] bg-white overflow-hidden text-xs">
+            <button
+              onClick={() => setScopeMode("this")}
+              className={cn(
+                "flex-1 px-3 py-1.5 font-medium transition-colors",
+                scopeMode === "this"
+                  ? "bg-[var(--cf-blue-500)] text-white"
+                  : "text-[var(--cf-gray-600)] hover:bg-[var(--cf-gray-50)]"
+              )}
+            >
+              This sitemap only
+            </button>
+            <button
+              onClick={() => setScopeMode("full")}
+              className={cn(
+                "flex-1 px-3 py-1.5 font-medium transition-colors border-l border-[var(--cf-gray-200)]",
+                scopeMode === "full"
+                  ? "bg-[var(--cf-blue-500)] text-white"
+                  : "text-[var(--cf-gray-600)] hover:bg-[var(--cf-gray-50)]"
+              )}
+            >
+              Full site tree
+            </button>
           </div>
+        )}
+
+        {/* Row 2: Expand/Collapse toggle | Add folder | Show excluded */}
+        <div className="flex items-center gap-2">
+          {/* Single expand/collapse toggle */}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={allExpanded ? handleCollapseAll : handleExpandAll}
+            className="h-8 text-xs bg-transparent"
+          >
+            {allExpanded ? (
+              <>
+                <ChevronUp className="mr-1 h-3 w-3" />
+                Collapse
+              </>
+            ) : (
+              <>
+                <ChevronDown className="mr-1 h-3 w-3" />
+                Expand all
+              </>
+            )}
+          </Button>
+
+          <Button
+            onClick={() => handleOpenAddFolder(null)}
+            variant="outline"
+            size="sm"
+            className="h-8 bg-transparent"
+          >
+            <Folder className="mr-1 h-3 w-3" />
+            Add folder
+          </Button>
+
+          <div className="flex-1" />
+
           <Button
             variant={showExcluded ? "default" : "outline"}
             size="sm"
             onClick={() => setShowExcluded((v) => !v)}
             className={cn(
-              "h-9 text-xs shrink-0",
+              "h-8 text-xs shrink-0 w-[124px] justify-center",
               showExcluded
                 ? "bg-[var(--cf-orange-500)] hover:bg-[var(--cf-orange-500)] text-white"
                 : "bg-transparent"
@@ -611,37 +727,6 @@ export function SitemapPanelWithCallback({ onSelectNode, sitemap, onSitemapChang
             title="Show only excluded pages"
           >
             {showExcluded ? "Excluded only" : "Show excluded"}
-          </Button>
-        </div>
-        {/* Action buttons */}
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleExpandAll}
-            className="h-8 text-xs bg-transparent"
-          >
-            <ChevronDown className="mr-1 h-3 w-3" />
-            Expand
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleCollapseAll}
-            className="h-8 text-xs bg-transparent"
-          >
-            <ChevronUp className="mr-1 h-3 w-3" />
-            Collapse
-          </Button>
-          <div className="flex-1" />
-          <Button
-            onClick={() => handleAddChild("root", "section")}
-            variant="outline"
-            size="sm"
-            className="h-8 bg-transparent"
-          >
-            <Folder className="mr-1 h-3 w-3" />
-            Add folder
           </Button>
         </div>
       </div>
@@ -665,22 +750,33 @@ export function SitemapPanelWithCallback({ onSelectNode, sitemap, onSitemapChang
         </div>
       </div>
 
+      {/* Multi-select hint when multiple nodes selected */}
+      {selectedNodeIds.size > 1 && (
+        <div className="px-4 py-2 bg-[var(--cf-blue-50)] border-b border-[var(--cf-blue-200)] text-xs text-[var(--cf-blue-700)]">
+          {selectedNodeIds.size} items selected — use Shift+click to extend, Cmd/Ctrl+click to toggle
+        </div>
+      )}
+
       {/* Tree view */}
       <div className="flex-1 overflow-auto p-3">
         <TreeNode
           node={displayedSitemap}
           depth={0}
-          selectedNodeId={selectedNodeId}
+          selectedNodeId={primarySelectedNodeId}
+          selectedNodeIds={selectedNodeIds}
           currentPageId={currentPageId}
+          sitemapName={sitemapName}
+          isNodeOutOfScope={isChildSitemap && scopeMode === "full" ? isNodeOutOfScope : undefined}
+          onAddToSitemap={onAddContentTypeToChild}
           expandedNodes={searchQuery ? new Set(getAllNodeIds(displayedSitemap)) : expandedNodes}
           dragState={dragState}
-          onSelect={handleSelect}
+          onSelect={(nodeId, modifiers) => handleSelect(nodeId, modifiers)}
           onToggleExpand={handleToggleExpand}
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
           onDragOver={handleDragOver}
           onDrop={handleDrop}
-          onAddChild={handleAddChild}
+          onAddChild={(parentId) => handleOpenAddFolder(parentId)}
           onDelete={handleDelete}
           onRename={handleRename}
           onDuplicate={handleDuplicate}
@@ -693,51 +789,81 @@ export function SitemapPanelWithCallback({ onSelectNode, sitemap, onSitemapChang
       <div className="px-4 py-2 border-t border-[var(--cf-gray-200)] bg-[var(--cf-gray-50)]">
         <p className="text-xs text-[var(--cf-gray-500)]">
           <kbd className="px-1.5 py-0.5 bg-white border border-[var(--cf-gray-300)] rounded text-[10px] font-mono">Drag</kbd>
-          {" "}to reorder • 
-          <kbd className="px-1.5 py-0.5 bg-white border border-[var(--cf-gray-300)] rounded text-[10px] font-mono ml-1">Drop inside</kbd>
+          {" "}to reorder •{" "}
+          <kbd className="px-1.5 py-0.5 bg-white border border-[var(--cf-gray-300)] rounded text-[10px] font-mono">Drop inside</kbd>
           {" "}to nest • Max depth: {MAX_DEPTH} levels
         </p>
       </div>
 
-      {/* Add page/folder dialog */}
-      <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
+      {/* Add folder dialog */}
+      <Dialog open={showAddFolderDialog} onOpenChange={setShowAddFolderDialog}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>
-              {newPageType === "section" ? "Add new folder" : "Add new page"}
-            </DialogTitle>
+            <DialogTitle>Add new folder</DialogTitle>
             <DialogDescription>
-              {newPageType === "section" 
-                ? "Create a new folder to organize your pages."
-                : "Create a new page in your sitemap."
-              }
+              Create a new folder to organize your pages.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
             <div className="grid gap-2">
-              <Label htmlFor="title">
-                {newPageType === "section" ? "Folder name" : "Page title"}
-              </Label>
+              <Label htmlFor="title">Folder name</Label>
               <Input
                 id="title"
-                value={newPageTitle}
-                onChange={(e) => setNewPageTitle(e.target.value)}
-                placeholder={newPageType === "section" ? "Enter folder name..." : "Enter page title..."}
+                value={newFolderTitle}
+                onChange={(e) => setNewFolderTitle(e.target.value)}
+                placeholder="Enter folder name..."
                 autoFocus
               />
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowAddDialog(false)} className="bg-transparent">
+            <Button variant="outline" onClick={() => setShowAddFolderDialog(false)} className="bg-transparent">
               Cancel
             </Button>
             <Button
-              onClick={handleConfirmAdd}
-              disabled={!newPageTitle.trim() || creatingFolder}
+              onClick={handleConfirmAddFolder}
+              disabled={!newFolderTitle.trim() || creatingFolder}
               className="bg-[var(--cf-blue-500)] hover:bg-[var(--cf-blue-600)]"
             >
-              {creatingFolder ? "Creating…" : newPageType === "section" ? "Add folder" : "Add page"}
+              {creatingFolder ? "Creating…" : "Add folder"}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete confirmation dialog */}
+      <Dialog open={!!deleteConfirmNodeId} onOpenChange={(open) => !open && setDeleteConfirmNodeId(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete &quot;{deleteConfirmTitle}&quot;?</DialogTitle>
+            <DialogDescription>
+              This will delete this item and all its children. This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteConfirmNodeId(null)} className="bg-transparent">Cancel</Button>
+            <Button onClick={handleConfirmDelete} className="bg-[var(--cf-red-500)] hover:bg-[var(--cf-red-600)] text-white">Delete</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Rename dialog */}
+      <Dialog open={!!renameNodeId} onOpenChange={(open) => !open && setRenameNodeId(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Rename</DialogTitle>
+          </DialogHeader>
+          <div className="py-4">
+            <Input
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") handleConfirmRename() }}
+              autoFocus
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRenameNodeId(null)} className="bg-transparent">Cancel</Button>
+            <Button onClick={handleConfirmRename} disabled={!renameValue.trim()} className="bg-[var(--cf-blue-500)] hover:bg-[var(--cf-blue-600)]">Rename</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
