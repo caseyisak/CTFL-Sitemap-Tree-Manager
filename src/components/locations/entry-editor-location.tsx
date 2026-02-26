@@ -99,6 +99,8 @@ export function EntryEditorLocation() {
   const folderConfigRef = useRef<FolderNode[]>([])
   /** Prevents the sitemapMetadata onValueChanged subscription from re-fetching our own writes. */
   const isSavingMetaRef = useRef(false)
+  /** Prevents the excludeFromSitemap onValueChanged subscription from reacting to our own writes. */
+  const isSavingExcludeRef = useRef(false)
 
   const setEntryId = (id: string | null) => {
     sitemapEntryIdRef.current = id
@@ -326,6 +328,29 @@ export function EntryEditorLocation() {
     return () => unsub?.()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSitemapEntry, fetchEntries, sdk])
+
+  // Subscribe to excludeFromSitemap changes from the Editor tab radio button
+  useEffect(() => {
+    if (isSitemapEntry) return
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const excludeField = (sdk.entry as any)?.fields?.["excludeFromSitemap"]
+    if (!excludeField?.onValueChanged) return
+    const unsub = excludeField.onValueChanged((newVal: boolean | undefined) => {
+      if (isSavingExcludeRef.current) return
+      const excluded = newVal ?? false
+      const entryId = sdk.entry.getSys().id
+      setSitemap((prev) => {
+        if (!prev) return prev
+        const updateNode = (node: SitemapNode): SitemapNode => {
+          if (node.id === entryId) return { ...node, excludeFromSitemap: excluded }
+          return { ...node, children: node.children.map(updateNode) }
+        }
+        return updateNode(prev)
+      })
+    })
+    return () => unsub?.()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSitemapEntry, sdk])
 
   /**
    * Write sitemapMetadata via the SDK field setter for the currently-open entry.
@@ -788,11 +813,20 @@ export function EntryEditorLocation() {
           { entryId: nodeId },
           { ...entry, fields: { ...entry.fields, excludeFromSitemap: { "en-US": excluded } } }
         )
+        // Notify the Editor tab's radio button for the currently-open entry
+        if (nodeId === currentEntryId) {
+          isSavingExcludeRef.current = true
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            await (sdk.entry as any)?.fields?.["excludeFromSitemap"]?.setValue(excluded)
+          } catch { /* field may not be accessible from editor SDK */ }
+          setTimeout(() => { isSavingExcludeRef.current = false }, 300)
+        }
       } catch (e) {
         console.error("Failed to update excludeFromSitemap:", e)
       }
     },
-    [sdk, sitemap]
+    [sdk, sitemap, currentEntryId]
   )
 
   // ─── Derived state ────────────────────────────────────────────────────────────
