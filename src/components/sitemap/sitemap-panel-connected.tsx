@@ -31,6 +31,18 @@ interface SitemapPanelProps {
   sitemap: SitemapNode
   onSitemapChange: (sitemap: SitemapNode) => void
   currentPageId?: string
+  /** Actual name of the root Sitemap entry — shown as root node label in the tree */
+  sitemapName?: string
+  /** True when the currently-open Contentful entry is a child Sitemap (sitemapType = "child") */
+  isChildSitemap?: boolean
+  /** Content type IDs owned by this child sitemap */
+  childContentTypes?: string[]
+  /** All enabled content type IDs across the whole app */
+  allContentTypes?: string[]
+  /** Called when a greyed-out node's "Add to this sitemap" action is triggered */
+  onAddContentTypeToChild?: (ctId: string) => Promise<void>
+  /** Called when a member node's "Remove from this sitemap" action is triggered */
+  onRemoveContentTypeFromChild?: (ctId: string) => Promise<void>
   onRenameEntry?: (nodeId: string, newTitle: string) => Promise<void>
   onDuplicateEntry?: (nodeId: string) => Promise<void>
   onDeleteEntry?: (nodeId: string) => Promise<void>
@@ -44,6 +56,12 @@ export function SitemapPanelWithCallback({
   sitemap,
   onSitemapChange,
   currentPageId: currentPageIdProp,
+  sitemapName,
+  isChildSitemap,
+  childContentTypes,
+  allContentTypes,
+  onAddContentTypeToChild,
+  onRemoveContentTypeFromChild,
   onRenameEntry,
   onDuplicateEntry,
   onDeleteEntry,
@@ -75,6 +93,8 @@ export function SitemapPanelWithCallback({
   const [showExcluded, setShowExcluded] = useState(false)
   const [creatingFolder, setCreatingFolder] = useState(false)
   const [allExpanded, setAllExpanded] = useState(false)
+  /** "this" = show only this child's CT entries; "full" = show all (with greyed-out non-members) */
+  const [scopeMode, setScopeMode] = useState<"this" | "full">("full")
 
   function getAllExpandedIds(node: SitemapNode): string[] {
     const ids: string[] = []
@@ -508,9 +528,33 @@ export function SitemapPanelWithCallback({
     return null
   }
 
+  /** Returns true if a page node's content type is not in the child sitemap's owned CTs */
+  const isNodeOutOfScope = (node: SitemapNode): boolean => {
+    if (!isChildSitemap || !childContentTypes) return false
+    if (node.type !== "page") return false
+    if (!node.contentType) return false
+    return !childContentTypes.includes(node.contentType)
+  }
+
+  /** Filter tree to only nodes whose contentType is in childContentTypes (plus folders with matching descendants) */
+  const filterToScope = (node: SitemapNode): SitemapNode | null => {
+    if (node.type === "root" || node.type === "section") {
+      const filteredChildren = node.children
+        .map(filterToScope)
+        .filter((c): c is SitemapNode => c !== null)
+      if (filteredChildren.length > 0) return { ...node, children: filteredChildren, isExpanded: true }
+      return null
+    }
+    if (!node.contentType || !childContentTypes?.includes(node.contentType)) return null
+    return node
+  }
+
   const displayedSitemap = (() => {
     let result = searchQuery ? filterNodes(sitemap, searchQuery) || sitemap : sitemap
     if (showExcluded) result = filterExcluded(result) || result
+    if (isChildSitemap && scopeMode === "this" && childContentTypes) {
+      result = filterToScope(result) || result
+    }
     return result
   })()
 
@@ -608,6 +652,34 @@ export function SitemapPanelWithCallback({
           />
         </div>
 
+        {/* Child sitemap scope toggle */}
+        {isChildSitemap && (
+          <div className="flex items-center rounded-md border border-[var(--cf-gray-200)] bg-white overflow-hidden text-xs">
+            <button
+              onClick={() => setScopeMode("this")}
+              className={cn(
+                "flex-1 px-3 py-1.5 font-medium transition-colors",
+                scopeMode === "this"
+                  ? "bg-[var(--cf-blue-500)] text-white"
+                  : "text-[var(--cf-gray-600)] hover:bg-[var(--cf-gray-50)]"
+              )}
+            >
+              This sitemap only
+            </button>
+            <button
+              onClick={() => setScopeMode("full")}
+              className={cn(
+                "flex-1 px-3 py-1.5 font-medium transition-colors border-l border-[var(--cf-gray-200)]",
+                scopeMode === "full"
+                  ? "bg-[var(--cf-blue-500)] text-white"
+                  : "text-[var(--cf-gray-600)] hover:bg-[var(--cf-gray-50)]"
+              )}
+            >
+              Full site tree
+            </button>
+          </div>
+        )}
+
         {/* Row 2: Expand/Collapse toggle | Add folder | Show excluded */}
         <div className="flex items-center gap-2">
           {/* Single expand/collapse toggle */}
@@ -693,6 +765,9 @@ export function SitemapPanelWithCallback({
           selectedNodeId={primarySelectedNodeId}
           selectedNodeIds={selectedNodeIds}
           currentPageId={currentPageId}
+          sitemapName={sitemapName}
+          isNodeOutOfScope={isChildSitemap && scopeMode === "full" ? isNodeOutOfScope : undefined}
+          onAddToSitemap={onAddContentTypeToChild}
           expandedNodes={searchQuery ? new Set(getAllNodeIds(displayedSitemap)) : expandedNodes}
           dragState={dragState}
           onSelect={(nodeId, modifiers) => handleSelect(nodeId, modifiers)}

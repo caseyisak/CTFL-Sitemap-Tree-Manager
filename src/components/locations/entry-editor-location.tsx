@@ -20,7 +20,7 @@ import { SitemapPanelWithCallback } from "@/components/sitemap/sitemap-panel-con
 import { DetailsPanel } from "@/components/sitemap/details-panel"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Download, Loader2 } from "lucide-react"
+import { Loader2 } from "lucide-react"
 
 const PANEL_WIDTH_KEY = "stm-panel-width"
 const DEFAULT_PANEL_WIDTH = 420
@@ -91,6 +91,12 @@ export function EntryEditorLocation() {
   const [detectedSitemapCtId, setDetectedSitemapCtId] = useState<string | null>(storedSitemapCtId)
   /** The internalName (or legacy name) of the root Sitemap entry — used as breadcrumb root label. */
   const [sitemapEntryName, setSitemapEntryName] = useState<string>("Sitemap")
+  /** Number of child sitemaps linked to the root — used to determine single vs index mode */
+  const [childSitemapCount, setChildSitemapCount] = useState<number>(0)
+  /** Whether the currently-open entry is a child Sitemap entry (sitemapType = "child") */
+  const [isChildSitemap, setIsChildSitemap] = useState<boolean>(false)
+  /** content type IDs owned by this child sitemap (from the contentTypes field) */
+  const [thisChildContentTypes, setThisChildContentTypes] = useState<string[]>([])
 
   const isSitemapEntry = sdk.ids.contentType === (detectedSitemapCtId ?? storedSitemapCtId ?? "sitemap")
 
@@ -101,6 +107,8 @@ export function EntryEditorLocation() {
   const isSavingMetaRef = useRef(false)
   /** Prevents the excludeFromSitemap onValueChanged subscription from reacting to our own writes. */
   const isSavingExcludeRef = useRef(false)
+  /** Prevents the contentTypes onValueChanged subscription from reacting to our own writes. */
+  const isSavingCtRef = useRef(false)
 
   const setEntryId = (id: string | null) => {
     sitemapEntryIdRef.current = id
@@ -234,6 +242,24 @@ export function EntryEditorLocation() {
               (loc(f?.name) as string | undefined) ??
               "Sitemap"
             setSitemapEntryName(name)
+            // Count child sitemaps for mode detection (root only)
+            const childLinks = (loc(f?.childSitemaps) as Array<unknown> | undefined) ?? []
+            setChildSitemapCount(childLinks.length)
+          }
+
+          // Detect if the currently-open entry is a child Sitemap entry
+          const currentEntryIsChild = items.some((e) => {
+            const t = loc((e.fields as Record<string, unknown>)?.sitemapType) as string | null | undefined
+            return e.sys.id === sdk.entry.getSys().id && t === "child"
+          })
+          setIsChildSitemap(currentEntryIsChild)
+          if (currentEntryIsChild) {
+            const currentItem = items.find((e) => e.sys.id === sdk.entry.getSys().id)
+            if (currentItem) {
+              const cf = currentItem.fields as Record<string, unknown>
+              const ctIds = (loc(cf?.contentTypes) as string[] | undefined) ?? []
+              setThisChildContentTypes(ctIds)
+            }
           }
         }
       } catch { /* no sitemap entry available yet */ }
@@ -351,6 +377,20 @@ export function EntryEditorLocation() {
     return () => unsub?.()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSitemapEntry, sdk])
+
+  // Subscribe to contentTypes field changes when viewing a child Sitemap entry
+  useEffect(() => {
+    if (!isSitemapEntry || !isChildSitemap) return
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ctField = (sdk.entry as any)?.fields?.["contentTypes"]
+    if (!ctField?.onValueChanged) return
+    const unsub = ctField.onValueChanged((val: string[] | undefined) => {
+      if (isSavingCtRef.current) return
+      setThisChildContentTypes(val ?? [])
+    })
+    return () => unsub?.()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSitemapEntry, isChildSitemap, sdk])
 
   /**
    * Write sitemapMetadata via the SDK field setter for the currently-open entry.
@@ -488,27 +528,6 @@ export function EntryEditorLocation() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [sdk, originalSitemap, entries, folderConfig, saveFolderConfig, currentEntryId, writeCurrentEntryMeta, cascadePathUpdates]
   )
-
-  // ─── Export sitemap.xml ───────────────────────────────────────────────────────
-
-  const handleExportSitemap = () => {
-    if (!entries.length) return
-
-    const included = entries.filter((e) => !e.excludeFromSitemap && e.metadata?.computedPath)
-    const urls = included
-      .map((e) => `  <url>\n    <loc>${baseUrl}${e.metadata!.computedPath}</loc>\n  </url>`)
-      .join("\n")
-
-    const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>`
-
-    const blob = new Blob([xml], { type: "application/xml" })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = "sitemap.xml"
-    a.click()
-    URL.revokeObjectURL(url)
-  }
 
   // ─── Tree helpers ─────────────────────────────────────────────────────────────
 
@@ -829,6 +848,38 @@ export function EntryEditorLocation() {
     [sdk, sitemap, currentEntryId]
   )
 
+  // ─── Child sitemap content-type membership callbacks ──────────────────────────
+
+  const handleAddContentTypeToChild = useCallback(async (ctId: string) => {
+    if (!isSitemapEntry || !isChildSitemap) return
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const field = (sdk.entry as any)?.fields?.["contentTypes"]
+    if (!field) return
+    const current = (field.getValue() as string[] | undefined) ?? []
+    if (current.includes(ctId)) return
+    isSavingCtRef.current = true
+    try {
+      await field.setValue([...current, ctId])
+    } catch { /* field may not be accessible */ }
+    setTimeout(() => { isSavingCtRef.current = false }, 300)
+    setThisChildContentTypes((prev) => [...prev, ctId])
+  }, [isSitemapEntry, isChildSitemap, sdk])
+
+  const handleRemoveContentTypeFromChild = useCallback(async (ctId: string) => {
+    if (!isSitemapEntry || !isChildSitemap) return
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const field = (sdk.entry as any)?.fields?.["contentTypes"]
+    if (!field) return
+    const current = (field.getValue() as string[] | undefined) ?? []
+    if (!current.includes(ctId)) return
+    isSavingCtRef.current = true
+    try {
+      await field.setValue(current.filter((id) => id !== ctId))
+    } catch { /* field may not be accessible */ }
+    setTimeout(() => { isSavingCtRef.current = false }, 300)
+    setThisChildContentTypes((prev) => prev.filter((id) => id !== ctId))
+  }, [isSitemapEntry, isChildSitemap, sdk])
+
   // ─── Derived state ────────────────────────────────────────────────────────────
 
   const derivedSelectedNode = sitemap && selectedNodeId ? findNode(sitemap, selectedNodeId) : null
@@ -876,7 +927,13 @@ export function EntryEditorLocation() {
       <div className="flex items-center justify-between px-4 py-2 bg-white border-b border-[var(--cf-gray-200)]">
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold text-[var(--cf-gray-700)]">
-            {isSitemapEntry ? sitemapEntryName : "Sitemap"}
+            {isSitemapEntry
+              ? isChildSitemap
+                ? sitemapEntryName
+                : childSitemapCount > 0
+                  ? `${sitemapEntryName} — Sitemap index (${childSitemapCount} ${childSitemapCount === 1 ? "child" : "children"})`
+                  : `${sitemapEntryName} — Single sitemap`
+              : "Sitemap"}
           </span>
           {saveStatus === "saving" && (
             <Badge className="bg-[var(--cf-orange-100)] text-[var(--cf-orange-500)] hover:bg-[var(--cf-orange-100)] text-xs">
@@ -894,17 +951,6 @@ export function EntryEditorLocation() {
             </Badge>
           )}
         </div>
-        {isSitemapEntry && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleExportSitemap}
-            className="bg-transparent h-8"
-          >
-            <Download className="mr-1.5 h-3.5 w-3.5" />
-            Export sitemap.xml
-          </Button>
-        )}
       </div>
 
       {/* Mobile toggle */}
@@ -931,6 +977,12 @@ export function EntryEditorLocation() {
             sitemap={sitemap}
             onSitemapChange={handleSitemapChange}
             currentPageId={currentEntryId ?? undefined}
+            sitemapName={sitemapEntryName}
+            isChildSitemap={isChildSitemap}
+            childContentTypes={thisChildContentTypes}
+            allContentTypes={enabledContentTypes}
+            onAddContentTypeToChild={handleAddContentTypeToChild}
+            onRemoveContentTypeFromChild={handleRemoveContentTypeFromChild}
             onRenameEntry={handleRenameEntry}
             onDuplicateEntry={handleDuplicateEntry}
             onDeleteEntry={handleDeleteEntry}

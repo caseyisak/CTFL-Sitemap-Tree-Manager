@@ -18,6 +18,7 @@ import {
   Copy,
   ExternalLink,
   Home,
+  Plus,
 } from "lucide-react"
 import {
   DropdownMenu,
@@ -34,6 +35,8 @@ interface TreeNodeProps {
   selectedNodeId: string | null
   selectedNodeIds?: Set<string>
   currentPageId: string | null
+  /** Actual name of the root Sitemap entry — displayed instead of "root" for the root node */
+  sitemapName?: string
   expandedNodes: Set<string>
   dragState: DragState
   onSelect: (nodeId: string, modifiers?: { shift?: boolean; meta?: boolean }) => void
@@ -47,6 +50,10 @@ interface TreeNodeProps {
   onRename: (nodeId: string) => void
   onDuplicate: (nodeId: string) => void
   onOpenNewTab: (nodeId: string) => void
+  /** Function that determines if a node is out-of-scope for the current child sitemap view */
+  isNodeOutOfScope?: (node: SitemapNode) => boolean
+  /** Called when user clicks "Add to this sitemap" on an out-of-scope node */
+  onAddToSitemap?: (ctId: string) => Promise<void>
   path: string[]
   /** Is this node the last child among its siblings? Drives the L-shape vs pass-through connector. */
   isLastChild?: boolean
@@ -62,6 +69,7 @@ export function TreeNode({
   selectedNodeId,
   selectedNodeIds,
   currentPageId,
+  sitemapName,
   expandedNodes,
   dragState,
   onSelect,
@@ -75,6 +83,8 @@ export function TreeNode({
   onRename,
   onDuplicate,
   onOpenNewTab,
+  isNodeOutOfScope,
+  onAddToSitemap,
   path,
   isLastChild,
   ancestorLastChildren,
@@ -92,6 +102,7 @@ export function TreeNode({
   const isFolder = node.type === "section" || node.type === "root"
   const canHaveChildren = node.type !== "page" || depth < MAX_DEPTH - 1
   const isRoot = node.type === "root"
+  const isOutOfScope = isNodeOutOfScope ? isNodeOutOfScope(node) : false
 
   const handleDragStart = (e: React.DragEvent) => {
     if (isRoot) {
@@ -211,7 +222,8 @@ export function TreeNode({
           isCurrentPage && "ring-2 ring-[var(--cf-blue-400)] ring-offset-1",
           isDragging && "opacity-50 cursor-grabbing",
           !isDragging && !isRoot && "cursor-grab",
-          isDragTarget && dropIndicator === "inside" && "bg-[var(--cf-blue-100)] ring-2 ring-[var(--cf-blue-400)] ring-inset"
+          isDragTarget && dropIndicator === "inside" && "bg-[var(--cf-blue-100)] ring-2 ring-[var(--cf-blue-400)] ring-inset",
+          isOutOfScope && "opacity-50"
         )}
       >
         {/* Drop indicators */}
@@ -300,12 +312,13 @@ export function TreeNode({
         {/* Node content */}
         <button
           onClick={(e) => onSelect(node.id, { shift: e.shiftKey, meta: e.metaKey || e.ctrlKey })}
+          title={isOutOfScope ? "Not in this sitemap" : undefined}
           className={cn(
             "flex-1 flex items-center gap-2 text-left rounded px-2 py-1 min-w-0",
             getTypeColor()
           )}
         >
-          <span className="truncate text-sm font-medium">{isRoot ? "root" : node.title}</span>
+          <span className="truncate text-sm font-medium">{isRoot ? (sitemapName ?? node.title) : node.title}</span>
           {isCurrentPage && (
             <span className="shrink-0 text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded bg-[var(--cf-blue-500)] text-white">
               Current
@@ -331,6 +344,15 @@ export function TreeNode({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-48">
+            {isOutOfScope && onAddToSitemap && node.contentType && (
+              <>
+                <DropdownMenuItem onClick={() => onAddToSitemap(node.contentType!)}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Add to this sitemap
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+              </>
+            )}
             {canHaveChildren && (
               <>
                 <DropdownMenuItem onClick={() => onAddChild(node.id, "section")}>
@@ -392,6 +414,9 @@ export function TreeNode({
                 selectedNodeId={selectedNodeId}
                 selectedNodeIds={selectedNodeIds}
                 currentPageId={currentPageId}
+                sitemapName={sitemapName}
+                isNodeOutOfScope={isNodeOutOfScope}
+                onAddToSitemap={onAddToSitemap}
                 expandedNodes={expandedNodes}
                 dragState={dragState}
                 onSelect={onSelect}
