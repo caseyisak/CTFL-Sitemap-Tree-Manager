@@ -24,7 +24,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Separator } from "@/components/ui/separator"
-import { Globe, LayoutGrid, Plus, CheckCircle2, AlertCircle, ExternalLink, Copy, Check } from "lucide-react"
+import { Globe, LayoutGrid, Plus, CheckCircle2, AlertCircle, ExternalLink, Copy, Check, FileText, FolderOpen, ChevronDown, ChevronUp, Info } from "lucide-react"
 
 const CHANGE_FREQ_OPTIONS = ["always", "hourly", "daily", "weekly", "monthly", "yearly", "never"] as const
 
@@ -92,6 +92,9 @@ export function AppConfigScreen() {
 
   // robots.txt copy state
   const [copied, setCopied] = useState(false)
+
+  // "How it works" info box open state
+  const [showHowItWorks, setShowHowItWorks] = useState(false)
 
   // Keep handleConfigure ref fresh
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -299,6 +302,7 @@ export function AppConfigScreen() {
       // to match the current enabledContentTypes. Runs silently on every save.
       await syncContentTypesValidation(sitemapCtId, enabledContentTypes)
       await applyCheckboxAppearance(sitemapCtId)
+      await applyOmittedFields(sitemapCtId)
     }
 
     return {
@@ -348,6 +352,37 @@ export function AppConfigScreen() {
   }
 
   /**
+   * Sets `folderConfig` and `sitemapType` fields as omitted on the Sitemap CT editor interface
+   * so they don't appear in Contentful's raw Editor tab. Safe to call multiple times.
+   */
+  const applyOmittedFields = async (ctId: string) => {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const ei = await (sdk.cma.editorInterface as any).get({ contentTypeId: ctId })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const controls: Array<Record<string, any>> = ei.controls ?? []
+      const omittedIds = new Set(
+        controls.filter((c) => c.omitted).map((c) => c.fieldId)
+      )
+      if (omittedIds.has("folderConfig") && omittedIds.has("sitemapType")) return
+      const updated = controls.filter(
+        (c) => c.fieldId !== "folderConfig" && c.fieldId !== "sitemapType"
+      )
+      updated.push(
+        { fieldId: "folderConfig", omitted: true },
+        { fieldId: "sitemapType", omitted: true },
+      )
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (sdk.cma.editorInterface as any).update(
+        { contentTypeId: ctId },
+        { ...ei, controls: updated }
+      )
+    } catch (e) {
+      console.warn("Could not omit internal fields on Sitemap CT editor interface:", e)
+    }
+  }
+
+  /**
    * Updates the Sitemap CT's `contentTypes` field `in` validation to exactly
    * match the current `enabledContentTypes` list, then publishes the CT.
    * Called on every app-config save so options stay in sync automatically.
@@ -390,22 +425,24 @@ export function AppConfigScreen() {
           displayField: "internalName",
           fields: [
             { id: "internalName", name: "Internal Name", type: "Symbol", required: true, localized: false },
-            { id: "slug", name: "Slug", type: "Symbol", required: false, localized: false },
+            { id: "slug", name: "Slug", type: "Symbol", required: false, localized: false, helpText: "URL slug for the generated XML file (e.g. sitemap-index → /sitemap-index.xml)" },
             {
               id: "sitemapType",
               name: "Sitemap Type",
               type: "Symbol",
               required: false,
               localized: false,
+              helpText: "Managed by the app. 'root' = main sitemap or index; 'child' = sub-sitemap.",
               validations: [{ in: ["root", "child"] }],
             },
-            { id: "folderConfig", name: "Folder Config", type: "Object", required: false, localized: false },
+            { id: "folderConfig", name: "Folder Config", type: "Object", required: false, localized: false, helpText: "Managed by the Sitemap & Tree Manager app. Do not edit manually." },
             {
               id: "childSitemaps",
               name: "Child Sitemaps",
               type: "Array",
               required: false,
               localized: false,
+              helpText: "Link child sitemap entries here when using a sitemap index structure.",
               items: {
                 type: "Link",
                 linkType: "Entry",
@@ -418,6 +455,7 @@ export function AppConfigScreen() {
               type: "Array",
               required: false,
               localized: false,
+              helpText: "Content types whose entries appear in this sitemap. Managed by the tree view.",
               items: {
                 type: "Symbol",
                 validations: enabledContentTypes.length ? [{ in: enabledContentTypes }] : [],
@@ -429,6 +467,7 @@ export function AppConfigScreen() {
               type: "Symbol",
               required: false,
               localized: false,
+              helpText: "How often pages in this sitemap are expected to change (used in generated XML).",
               validations: [{ in: ["always", "hourly", "daily", "weekly", "monthly", "yearly", "never"] }],
             },
             {
@@ -437,6 +476,7 @@ export function AppConfigScreen() {
               type: "Number",
               required: false,
               localized: false,
+              helpText: "Priority 0.0–1.0 relative to other pages (used in generated XML).",
               validations: [{ range: { min: 0, max: 1 } }],
             },
           ],
@@ -491,6 +531,17 @@ export function AppConfigScreen() {
         required: false,
         localized: false,
       }
+      const HELP_TEXT_MAP: Record<string, string> = {
+        slug: "URL slug for the generated XML file (e.g. sitemap-index → /sitemap-index.xml)",
+        sitemapType: "Managed by the app. 'root' = main sitemap or index; 'child' = sub-sitemap.",
+        folderConfig: "Managed by the Sitemap & Tree Manager app. Do not edit manually.",
+        childSitemaps: "Link child sitemap entries here when using a sitemap index structure.",
+        contentTypes: "Content types whose entries appear in this sitemap. Managed by the tree view.",
+        changeFrequency: "How often pages in this sitemap are expected to change (used in generated XML).",
+        priority: "Priority 0.0–1.0 relative to other pages (used in generated XML).",
+      }
+      if (HELP_TEXT_MAP[fieldDef.id]) newField.helpText = HELP_TEXT_MAP[fieldDef.id]
+
       if (fieldDef.id === "sitemapType") {
         newField.validations = [{ in: ["root", "child"] }]
       } else if (fieldDef.id === "childSitemaps") {
@@ -700,6 +751,38 @@ export function AppConfigScreen() {
           don&apos;t exist. We never create or modify the slug field itself — map to your existing
           one.
         </p>
+
+        {/* "How it works" collapsible info box */}
+        <div className="rounded-md border border-[var(--cf-blue-200)] bg-[var(--cf-blue-50)]">
+          <button
+            onClick={() => setShowHowItWorks((v) => !v)}
+            className="flex items-center gap-2 w-full px-3 py-2 text-xs font-medium text-[var(--cf-blue-700)] hover:bg-[var(--cf-blue-100)] rounded-md transition-colors"
+          >
+            <Info className="h-3.5 w-3.5 shrink-0" />
+            <span className="flex-1 text-left">How it works — sitemapMetadata &amp; excludeFromSitemap</span>
+            {showHowItWorks ? <ChevronUp className="h-3.5 w-3.5 shrink-0" /> : <ChevronDown className="h-3.5 w-3.5 shrink-0" />}
+          </button>
+          {showHowItWorks && (
+            <div className="px-4 pb-3 pt-1 text-xs text-[var(--cf-gray-700)] space-y-2 border-t border-[var(--cf-blue-200)]">
+              <p>
+                When a content type is enabled, the app automatically adds two fields to it:
+              </p>
+              <ul className="space-y-1 ml-3 list-disc list-outside">
+                <li>
+                  <code className="bg-white border border-[var(--cf-gray-200)] px-1 py-0.5 rounded">sitemapMetadata</code>{" "}
+                  (JSON) — stores <code>parentEntryId</code> (which folder/page this entry belongs to) and{" "}
+                  <code>computedPath</code> (the full URL path, e.g. <code>/faculty/departments/cs</code>).
+                  Written automatically when you drag entries in the tree or use &ldquo;Move to folder.&rdquo;
+                </li>
+                <li>
+                  <code className="bg-white border border-[var(--cf-gray-200)] px-1 py-0.5 rounded">excludeFromSitemap</code>{" "}
+                  (Boolean) — hides an entry from the sitemap XML. Toggle it in the tree or the entry editor.
+                </li>
+              </ul>
+              <p className="text-[var(--cf-gray-500)]">You don&apos;t need to edit these fields manually — the app manages them for you.</p>
+            </div>
+          )}
+        </div>
 
         <div className="space-y-3">
           {contentTypes.map((ct) => {
@@ -941,6 +1024,42 @@ export function AppConfigScreen() {
                   </div>
                   <p className="text-xs text-[var(--cf-gray-500)]">Root sitemap index</p>
                 </div>
+
+                {/* Mode detection banner */}
+                {childSitemaps.length === 0 ? (
+                  <div className="flex items-start gap-3 p-3 rounded-md border border-[var(--cf-blue-200)] bg-[var(--cf-blue-50)]">
+                    <FileText className="h-4 w-4 text-[var(--cf-blue-500)] shrink-0 mt-0.5" />
+                    <div className="text-xs text-[var(--cf-gray-700)] space-y-0.5">
+                      <p className="font-semibold text-[var(--cf-blue-700)]">Single Sitemap Mode</p>
+                      <p>This sitemap covers all your enabled content types in one XML file. To switch to a sitemap index (multiple XML files), add child sitemaps below.</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-start gap-3 p-3 rounded-md border border-[var(--cf-orange-200)] bg-[var(--cf-orange-50)]">
+                    <FolderOpen className="h-4 w-4 text-[var(--cf-orange-500)] shrink-0 mt-0.5" />
+                    <div className="text-xs text-[var(--cf-gray-700)] space-y-1">
+                      <p className="font-semibold text-[var(--cf-orange-700)]">Sitemap Index Mode ({childSitemaps.length} {childSitemaps.length === 1 ? "child" : "children"})</p>
+                      <p>This entry generates a sitemap index file. Each child sitemap should have Content Types, Change Frequency, and Priority configured.</p>
+                      {childSitemaps.some((c) => !c.contentTypes.length || !c.changeFrequency || c.priority === null) && (
+                        <ul className="mt-1 space-y-0.5">
+                          {childSitemaps.filter((c) => !c.contentTypes.length || !c.changeFrequency || c.priority === null).map((c) => {
+                            const missing = [
+                              ...(!c.contentTypes.length ? ["Content Types"] : []),
+                              ...(!c.changeFrequency ? ["Change Frequency"] : []),
+                              ...(c.priority === null ? ["Priority"] : []),
+                            ]
+                            return (
+                              <li key={c.id} className="flex items-center gap-1 text-[var(--cf-orange-700)]">
+                                <AlertCircle className="h-3 w-3 shrink-0" />
+                                <span><span className="font-medium">{c.internalName}</span> — missing: {missing.join(", ")}</span>
+                              </li>
+                            )
+                          })}
+                        </ul>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 {/* Child sitemaps */}
                 {childSitemaps.length > 0 && (
