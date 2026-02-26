@@ -173,19 +173,25 @@ export function AppConfigScreen() {
         setContentTypeConfigs(params.contentTypeConfigs ?? {})
       }
 
-      const options: ContentTypeOption[] = (ctResponse.items ?? []).map((ct) => ({
-        id: ct.sys.id,
-        name: ct.name,
-        symbolFields: (ct.fields ?? [])
-          .filter((f) => f.type === "Symbol")
-          .map((f) => ({ id: f.id, name: f.name })),
-      }))
-      setContentTypes(options)
-
-      // Detect Sitemap CT by ID "sitemap" first, then by name
+      // Detect Sitemap CT by ID "sitemap" first, then by name — must be done before
+      // building options so we can exclude it from the toggleable list.
       const sitemapCt =
         (ctResponse.items ?? []).find((ct) => ct.sys.id === "sitemap") ??
         (ctResponse.items ?? []).find((ct) => ct.name.toLowerCase() === "sitemap")
+
+      const detectedSitemapCtId = sitemapCt?.sys.id ?? null
+
+      const options: ContentTypeOption[] = (ctResponse.items ?? [])
+        // Exclude the Sitemap CT itself from the manageable content-type list
+        .filter((ct) => ct.sys.id !== detectedSitemapCtId)
+        .map((ct) => ({
+          id: ct.sys.id,
+          name: ct.name,
+          symbolFields: (ct.fields ?? [])
+            .filter((f) => f.type === "Symbol")
+            .map((f) => ({ id: f.id, name: f.name })),
+        }))
+      setContentTypes(options)
 
       if (sitemapCt) {
         setSitemapCtId(sitemapCt.sys.id)

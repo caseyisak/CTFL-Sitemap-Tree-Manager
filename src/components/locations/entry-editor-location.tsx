@@ -13,6 +13,7 @@ import {
   buildSitemapTreeWithFolders,
   findChangedParentIds,
   transformEntry,
+  slugify,
 } from "@/lib/sitemap-utils"
 import type { SitemapNode } from "@/lib/sitemap-types"
 import { SitemapPanelWithCallback } from "@/components/sitemap/sitemap-panel-connected"
@@ -25,6 +26,54 @@ const PANEL_WIDTH_KEY = "stm-panel-width"
 const DEFAULT_PANEL_WIDTH = 420
 const MIN_PANEL_WIDTH = 280
 const MAX_PANEL_WIDTH = 700
+
+// ─── Module-level pure helpers ────────────────────────────────────────────────
+
+/**
+ * Computes the full URL path for a node by walking its ancestor slugs in the tree.
+ * Skips empty slugs (e.g. the root node's slug is "").
+ */
+function computeFullPath(tree: SitemapNode, targetId: string): string {
+  let targetSlug = ""
+  const walkPath = (node: SitemapNode, id: string, ancestorSlugs: string[]): string[] | null => {
+    if (node.id === id) { targetSlug = node.slug; return ancestorSlugs }
+    for (const child of node.children) {
+      const result = walkPath(child, id, [...ancestorSlugs, node.slug])
+      if (result) return result
+    }
+    return null
+  }
+  const ancestorSlugs = walkPath(tree, targetId, [])
+  if (ancestorSlugs === null) return ""
+  const parts = [...ancestorSlugs.filter(Boolean), targetSlug].filter(Boolean)
+  return parts.length ? `/${parts.join("/")}` : `/${targetSlug}`
+}
+
+/**
+ * Collects all page entry IDs that are descendants (at any depth) of a given tree node.
+ */
+function collectDescendantPageIds(
+  tree: SitemapNode,
+  startNodeId: string,
+  pageEntryIds: Set<string>
+): string[] {
+  const ids: string[] = []
+  const findAndCollect = (node: SitemapNode): boolean => {
+    if (node.id === startNodeId) {
+      const collect = (n: SitemapNode) => {
+        for (const child of n.children) {
+          if (pageEntryIds.has(child.id)) ids.push(child.id)
+          collect(child)
+        }
+      }
+      collect(node)
+      return true
+    }
+    return node.children.some(findAndCollect)
+  }
+  findAndCollect(tree)
+  return ids
+}
 
 export function EntryEditorLocation() {
   const sdk = useSDK<EditorAppSDK>()
@@ -48,6 +97,8 @@ export function EntryEditorLocation() {
   // ─── Refs for always-current values ──────────────────────────────────────────
   const sitemapEntryIdRef = useRef<string | null>(null)
   const folderConfigRef = useRef<FolderNode[]>([])
+  /** Prevents the sitemapMetadata onValueChanged subscription from re-fetching our own writes. */
+  const isSavingMetaRef = useRef(false)
 
   const setEntryId = (id: string | null) => {
     sitemapEntryIdRef.current = id
@@ -260,29 +311,75 @@ export function EntryEditorLocation() {
 
   const currentEntryId = !isSitemapEntry ? sdk.entry.getSys().id : null
 
+  // ─── Subscribe to sitemapMetadata changes from the field editor ───────────────
+  // When the field editor moves this entry to a different folder, re-fetch so the
+  // sitemap tree reflects the change. Guard with isSavingMetaRef to skip our own writes.
+  useEffect(() => {
+    if (isSitemapEntry) return
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const metaField = (sdk.entry as any)?.fields?.["sitemapMetadata"]
+    if (!metaField?.onValueChanged) return
+    const unsub = metaField.onValueChanged(() => {
+      if (isSavingMetaRef.current) return
+      fetchEntries()
+    })
+    return () => unsub?.()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSitemapEntry, fetchEntries, sdk])
+
+  /**
+   * Write sitemapMetadata via the SDK field setter for the currently-open entry.
+   * This triggers onValueChanged in the field editor iframe so the slug field stays
+   * in sync without requiring a page reload.
+   */
+  const writeCurrentEntryMeta = useCallback(async (meta: SitemapMetadata) => {
+    if (!currentEntryId) return
+    isSavingMetaRef.current = true
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (sdk.entry as any)?.fields?.["sitemapMetadata"]?.setValue(meta)
+    } catch { /* field may not be accessible from editor SDK */ }
+    // Reset after a tick so the onValueChanged fires and is suppressed, then clears
+    setTimeout(() => { isSavingMetaRef.current = false }, 300)
+  }, [currentEntryId, sdk])
+
+  /**
+   * Recompute and persist computedPath for all page entries that are descendants of
+   * a given folder/node in the tree. Also notifies the field editor for the current entry.
+   */
+  const cascadePathUpdates = useCallback(async (
+    tree: SitemapNode,
+    folderId: string,
+    pageEntryIds: Set<string>,
+  ) => {
+    const descendantIds = collectDescendantPageIds(tree, folderId, pageEntryIds)
+    for (const pageId of descendantIds) {
+      try {
+        const pageEntry = await sdk.cma.entry.get({ entryId: pageId })
+        const existingMeta = (pageEntry.fields?.sitemapMetadata?.["en-US"]) as SitemapMetadata | undefined
+        const newPath = computeFullPath(tree, pageId)
+        const newMeta: SitemapMetadata = {
+          parentEntryId: existingMeta?.parentEntryId ?? null,
+          computedPath: newPath,
+        }
+        await sdk.cma.entry.update(
+          { entryId: pageId },
+          { ...pageEntry, fields: { ...pageEntry.fields, sitemapMetadata: { "en-US": newMeta } } }
+        )
+        if (pageId === currentEntryId) {
+          await writeCurrentEntryMeta(newMeta)
+        }
+      } catch (e) {
+        console.error(`Failed to cascade computedPath for ${pageId}:`, e)
+      }
+    }
+  }, [sdk, currentEntryId, writeCurrentEntryMeta])
+
   useEffect(() => {
     if (sitemap && currentEntryId && selectedNodeId === null) {
       setSelectedNodeId(currentEntryId)
     }
   }, [sitemap, currentEntryId, selectedNodeId])
-
-  // ─── Path computation ─────────────────────────────────────────────────────────
-
-  const computeFullPath = (tree: SitemapNode, targetId: string): string => {
-    let targetSlug = ""
-    const walkPath = (node: SitemapNode, id: string, ancestorSlugs: string[]): string[] | null => {
-      if (node.id === id) { targetSlug = node.slug; return ancestorSlugs }
-      for (const child of node.children) {
-        const result = walkPath(child, id, [...ancestorSlugs, node.slug])
-        if (result) return result
-      }
-      return null
-    }
-    const ancestorSlugs = walkPath(tree, targetId, [])
-    if (ancestorSlugs === null) return ""
-    const parts = [...ancestorSlugs.filter(Boolean), targetSlug].filter(Boolean)
-    return parts.length ? `/${parts.join("/")}` : `/${targetSlug}`
-  }
 
   // ─── Sitemap change handler ───────────────────────────────────────────────────
 
@@ -334,6 +431,10 @@ export function EntryEditorLocation() {
             { entryId: id },
             { ...entry, fields: { ...entry.fields, sitemapMetadata: { "en-US": newMeta } } }
           )
+          // Notify the field editor iframe so its onValueChanged fires immediately
+          if (id === currentEntryId) {
+            await writeCurrentEntryMeta(newMeta)
+          }
         }
 
         if (changedFolders.length > 0) {
@@ -343,6 +444,11 @@ export function EntryEditorLocation() {
             return f
           })
           await saveFolderConfig(updatedFolders)
+
+          // Cascade computedPath to all page entries under each re-parented folder
+          for (const { id: folderId } of changedFolders) {
+            await cascadePathUpdates(newSitemap, folderId, realEntryIds)
+          }
         }
 
         setOriginalSitemap(JSON.parse(JSON.stringify(newSitemap)))
@@ -355,7 +461,7 @@ export function EntryEditorLocation() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sdk, originalSitemap, entries, folderConfig, saveFolderConfig]
+    [sdk, originalSitemap, entries, folderConfig, saveFolderConfig, currentEntryId, writeCurrentEntryMeta, cascadePathUpdates]
   )
 
   // ─── Export sitemap.xml ───────────────────────────────────────────────────────
@@ -488,19 +594,34 @@ export function EntryEditorLocation() {
     const isFolder = currentFolders.some((f) => f.id === nodeId)
 
     if (isFolder) {
-      await saveFolderConfig(currentFolders.map((f) => f.id === nodeId ? { ...f, title: newTitle } : f))
-    } else {
-      const realEntry = entries.find((e) => e.id === nodeId)
-      if (realEntry) {
-        const entry = await sdk.cma.entry.get({ entryId: nodeId })
-        const ctId = entry.sys.contentType?.sys?.id ?? ""
-        const titleFieldId = await getTitleFieldId(ctId)
-        await sdk.cma.entry.update({ entryId: nodeId }, {
-          ...entry,
-          fields: { ...entry.fields, [titleFieldId]: { "en-US": newTitle } },
-        })
-        setEntries((prev) => prev.map((e) => e.id === nodeId ? { ...e, title: newTitle } : e))
+      const newSlug = slugify(newTitle)
+      await saveFolderConfig(currentFolders.map((f) =>
+        f.id === nodeId ? { ...f, title: newTitle, slug: newSlug } : f
+      ))
+      // Build updated tree, set it, then cascade path updates to all descendants
+      if (sitemap) {
+        const updateNode = (node: SitemapNode): SitemapNode => {
+          if (node.id === nodeId) return { ...node, title: newTitle, slug: newSlug }
+          return { ...node, children: node.children.map(updateNode) }
+        }
+        const updatedTree = updateNode(sitemap)
+        setSitemap(updatedTree)
+        const realEntryIds = new Set(entries.map((e) => e.id))
+        await cascadePathUpdates(updatedTree, nodeId, realEntryIds)
       }
+      return
+    }
+
+    const realEntry = entries.find((e) => e.id === nodeId)
+    if (realEntry) {
+      const entry = await sdk.cma.entry.get({ entryId: nodeId })
+      const ctId = entry.sys.contentType?.sys?.id ?? ""
+      const titleFieldId = await getTitleFieldId(ctId)
+      await sdk.cma.entry.update({ entryId: nodeId }, {
+        ...entry,
+        fields: { ...entry.fields, [titleFieldId]: { "en-US": newTitle } },
+      })
+      setEntries((prev) => prev.map((e) => e.id === nodeId ? { ...e, title: newTitle } : e))
     }
 
     setSitemap((prev) => {
@@ -511,7 +632,7 @@ export function EntryEditorLocation() {
       }
       return updateNode(prev)
     })
-  }, [sdk, entries, getTitleFieldId, saveFolderConfig])
+  }, [sdk, entries, sitemap, getTitleFieldId, saveFolderConfig, cascadePathUpdates])
 
   const handleDuplicateEntry = useCallback(async (nodeId: string) => {
     const realEntry = entries.find((e) => e.id === nodeId)
@@ -594,14 +715,25 @@ export function EntryEditorLocation() {
       await saveFolderConfig(currentFolders.map((f) =>
         f.id === nodeId ? { ...f, title: data.title, slug: data.slug } : f
       ))
-      setSitemap((prev) => {
-        if (!prev) return prev
+      if (sitemap) {
         const updateNode = (node: SitemapNode): SitemapNode => {
           if (node.id === nodeId) return { ...node, title: data.title, slug: data.slug }
           return { ...node, children: node.children.map(updateNode) }
         }
-        return updateNode(prev)
-      })
+        const updatedTree = updateNode(sitemap)
+        setSitemap(updatedTree)
+        const realEntryIds = new Set(entries.map((e) => e.id))
+        await cascadePathUpdates(updatedTree, nodeId, realEntryIds)
+      } else {
+        setSitemap((prev) => {
+          if (!prev) return prev
+          const updateNode = (node: SitemapNode): SitemapNode => {
+            if (node.id === nodeId) return { ...node, title: data.title, slug: data.slug }
+            return { ...node, children: node.children.map(updateNode) }
+          }
+          return updateNode(prev)
+        })
+      }
       return
     }
 
@@ -634,7 +766,7 @@ export function EntryEditorLocation() {
       console.error("Save failed:", e instanceof Error ? e.message : e)
       setSaveStatus("error")
     }
-  }, [sdk, entries, contentTypeConfigs, getTitleFieldId, saveFolderConfig])
+  }, [sdk, entries, sitemap, contentTypeConfigs, getTitleFieldId, saveFolderConfig, cascadePathUpdates])
 
   const handleExcludeFromSitemap = useCallback(
     async (nodeId: string, excluded: boolean) => {

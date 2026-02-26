@@ -48,6 +48,12 @@ interface TreeNodeProps {
   onDuplicate: (nodeId: string) => void
   onOpenNewTab: (nodeId: string) => void
   path: string[]
+  /** Is this node the last child among its siblings? Drives the L-shape vs pass-through connector. */
+  isLastChild?: boolean
+  /** For each ancestor level (depth 1 … d-1), was that ancestor the last child?
+   *  true  → was last  → no vertical continuation line at that depth column
+   *  false → was not last → draw a vertical pass-through line */
+  ancestorLastChildren?: boolean[]
 }
 
 export function TreeNode({
@@ -70,6 +76,8 @@ export function TreeNode({
   onDuplicate,
   onOpenNewTab,
   path,
+  isLastChild,
+  ancestorLastChildren,
 }: TreeNodeProps) {
   const nodeRef = useRef<HTMLDivElement>(null)
   const [dropIndicator, setDropIndicator] = useState<"before" | "after" | "inside" | null>(null)
@@ -196,7 +204,7 @@ export function TreeNode({
         onDrop={handleDrop}
         onDragEnd={handleDragEnd}
         className={cn(
-          "group relative flex items-center rounded-md pr-2 py-1.5 transition-all duration-150",
+          "group relative flex items-center rounded-md pr-2 transition-all duration-150",
           "hover:bg-[var(--cf-gray-100)]",
           isSelected && "bg-[var(--cf-blue-100)] hover:bg-[var(--cf-blue-100)]",
           isMultiSelected && "bg-[var(--cf-blue-50)] ring-1 ring-[var(--cf-blue-300)] hover:bg-[var(--cf-blue-50)]",
@@ -220,7 +228,7 @@ export function TreeNode({
 
         {/* Fixed-left controls: grip + checkbox always anchored at left edge */}
         {!isRoot ? (
-          <div className="flex items-center gap-0.5 shrink-0 pl-1">
+          <div className="flex items-center gap-0.5 shrink-0 pl-1 py-1.5">
             <div className="opacity-0 group-hover:opacity-100 transition-opacity cursor-grab active:cursor-grabbing">
               <GripVertical className="h-4 w-4 text-[var(--cf-gray-400)]" />
             </div>
@@ -240,11 +248,32 @@ export function TreeNode({
             />
           </div>
         ) : (
-          <div className="w-9 shrink-0" />
+          <div className="w-9 shrink-0 py-1.5" />
         )}
 
-        {/* Depth-indented section: expand toggle → icon → content → status → actions */}
-        <div className="flex items-center gap-2 flex-1 min-w-0" style={{ paddingLeft: `${depth * 12}px` }}>
+        {/* Connector stack — one 20px column per depth level, Contentful-style */}
+        {!isRoot && (
+          <div className="flex shrink-0" style={{ alignSelf: "stretch" }}>
+            {/* Ancestor columns: pass-through vertical if that ancestor was NOT the last child */}
+            {(ancestorLastChildren ?? []).map((wasLast, i) => (
+              <div key={i} style={{ width: "20px", flexShrink: 0, position: "relative", alignSelf: "stretch" }}>
+                {!wasLast && (
+                  <div style={{ position: "absolute", top: 0, bottom: 0, left: "50%", width: "1px", backgroundColor: "var(--cf-gray-300)" }} />
+                )}
+              </div>
+            ))}
+            {/* Current node's own connector column */}
+            <div style={{ width: "20px", flexShrink: 0, position: "relative", alignSelf: "stretch" }}>
+              {/* Vertical segment: stops at 50% for last child (L-shape), full height for others */}
+              <div style={{ position: "absolute", top: 0, bottom: isLastChild ? "50%" : 0, left: "50%", width: "1px", backgroundColor: "var(--cf-gray-300)" }} />
+              {/* Horizontal arm pointing right toward the content */}
+              <div style={{ position: "absolute", top: "50%", left: "50%", right: 0, height: "1px", backgroundColor: "var(--cf-gray-300)" }} />
+            </div>
+          </div>
+        )}
+
+        {/* Content section — connectors above handle indentation, no paddingLeft needed */}
+        <div className="flex items-center gap-2 flex-1 min-w-0 py-1.5">
 
         {/* Expand/Collapse toggle - show for folders even if empty */}
         {(hasChildren || isFolder) ? (
@@ -344,38 +373,42 @@ export function TreeNode({
 
       {/* Children */}
       {isExpanded && (hasChildren || isFolder) && (
-        <div className="relative">
-          {/* Vertical connector line */}
-          {hasChildren && (
-            <div
-              className="absolute top-0 bottom-0 w-px bg-[var(--cf-gray-300)]"
-              style={{ left: `${depth * 12 + 60}px` }}
-            />
-          )}
-          {node.children.map((child) => (
-            <TreeNode
-              key={child.id}
-              node={child}
-              depth={depth + 1}
-              selectedNodeId={selectedNodeId}
-              selectedNodeIds={selectedNodeIds}
-              currentPageId={currentPageId}
-              expandedNodes={expandedNodes}
-              dragState={dragState}
-              onSelect={onSelect}
-              onToggleExpand={onToggleExpand}
-              onDragStart={onDragStart}
-              onDragEnd={onDragEnd}
-              onDragOver={onDragOver}
-              onDrop={onDrop}
-              onAddChild={onAddChild}
-              onDelete={onDelete}
-              onRename={onRename}
-              onDuplicate={onDuplicate}
-              onOpenNewTab={onOpenNewTab}
-              path={[...path, node.id]}
-            />
-          ))}
+        <div>
+          {node.children.map((child, index) => {
+            const childIsLast = index === node.children.length - 1
+            // Build the ancestor context to pass down:
+            // Root shows no connector itself, so its children start with an empty ancestor list.
+            // For any other node: append whether THIS node is the last child.
+            const childAncestors = isRoot
+              ? []
+              : [...(ancestorLastChildren ?? []), isLastChild ?? true]
+            return (
+              <TreeNode
+                key={child.id}
+                node={child}
+                depth={depth + 1}
+                isLastChild={childIsLast}
+                ancestorLastChildren={childAncestors}
+                selectedNodeId={selectedNodeId}
+                selectedNodeIds={selectedNodeIds}
+                currentPageId={currentPageId}
+                expandedNodes={expandedNodes}
+                dragState={dragState}
+                onSelect={onSelect}
+                onToggleExpand={onToggleExpand}
+                onDragStart={onDragStart}
+                onDragEnd={onDragEnd}
+                onDragOver={onDragOver}
+                onDrop={onDrop}
+                onAddChild={onAddChild}
+                onDelete={onDelete}
+                onRename={onRename}
+                onDuplicate={onDuplicate}
+                onOpenNewTab={onOpenNewTab}
+                path={[...path, node.id]}
+              />
+            )
+          })}
         </div>
       )}
     </div>

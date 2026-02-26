@@ -16,11 +16,35 @@ interface ParentEntry {
   title: string
   slug: string | null
   isFolder: boolean
+  parentId: string | null
 }
 
 /** Read en-US locale value from a CMA field (typed as unknown). */
 const loc = (field: unknown): unknown =>
   (field as Record<string, unknown> | undefined)?.["en-US"]
+
+/** Walk up the folder hierarchy to build an ordered chain from root to immediate parent. */
+function buildParentChain(folders: ParentEntry[], immediateParentId: string | null): ParentEntry[] {
+  if (!immediateParentId) return []
+  const chain: ParentEntry[] = []
+  let currentId: string | null = immediateParentId
+  const visited = new Set<string>()
+  while (currentId) {
+    if (visited.has(currentId)) break
+    visited.add(currentId)
+    const folder = folders.find((f) => f.id === currentId)
+    if (!folder) break
+    chain.unshift(folder)
+    currentId = folder.parentId
+  }
+  return chain
+}
+
+/** Compute the full URL slug path from an ancestor chain + own slug. */
+function computeFullSlugPath(chain: ParentEntry[], slug: string): string {
+  const parts = [...chain.map((f) => f.slug).filter((s): s is string => Boolean(s)), slug].filter(Boolean)
+  return parts.length ? `/${parts.join("/")}` : `/${slug}`
+}
 
 export function EntryFieldLocation() {
   const sdk = useSDK<FieldAppSDK>()
@@ -33,7 +57,6 @@ export function EntryFieldLocation() {
   // All hooks must be called unconditionally — no early returns before this line
   const [slug, setSlug] = useState<string>("")
   const [metadata, setMetadata] = useState<SitemapMetadata | null>(null)
-  const [parentEntry, setParentEntry] = useState<ParentEntry | null>(null)
   const [allEntries, setAllEntries] = useState<ParentEntry[]>([])
   const [folderListOpen, setFolderListOpen] = useState(false)
   const [folderSearch, setFolderSearch] = useState("")
@@ -88,6 +111,7 @@ export function EntryFieldLocation() {
                   title: folder.title,
                   slug: folder.slug ?? null,
                   isFolder: true,
+                  parentId: folder.parentId ?? null,
                 })
               }
             }
@@ -96,19 +120,10 @@ export function EntryFieldLocation() {
       }
 
       setAllEntries(results)
-
-      // Resolve current parent entry.
-      // If the parentEntryId doesn't match any folder (e.g. it was set by drag-drop to a
-      // page entry), fall back to showing the raw ID as the badge title.
-      const parentId = metadata?.parentEntryId
-      if (parentId) {
-        const parent = results.find((e) => e.id === parentId)
-        setParentEntry(parent ?? { id: parentId, title: parentId, slug: null, isFolder: false })
-      }
     } catch (e) {
       console.error("Failed to fetch entries for parent picker:", e)
     }
-  }, [sdk, installation, metadata?.parentEntryId, isMetadataField])
+  }, [sdk, installation, isMetadataField])
 
   useEffect(() => {
     if (isMetadataField) return
@@ -153,18 +168,6 @@ export function EntryFieldLocation() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMetadataField])
 
-  // Resolve parent label when metadata changes.
-  // If parentEntryId is set but not found in allEntries (folders only), show the raw ID.
-  useEffect(() => {
-    const parentId = metadata?.parentEntryId
-    if (parentId) {
-      const parent = allEntries.find((e) => e.id === parentId)
-      setParentEntry(parent ?? { id: parentId, title: parentId, slug: null, isFolder: false })
-    } else {
-      setParentEntry(null)
-    }
-  }, [metadata?.parentEntryId, allEntries])
-
   // Gracefully handle the sitemapMetadata JSON field
   if (isMetadataField) {
     return (
@@ -187,26 +190,21 @@ export function EntryFieldLocation() {
     if (metadataField) {
       const existingMeta = metadataField.getValue() as SitemapMetadata | undefined
       const parentId = existingMeta?.parentEntryId ?? null
+      const chain = buildParentChain(allEntries, parentId)
       await metadataField.setValue({
         parentEntryId: parentId,
-        computedPath: parentId
-          ? `${parentEntry?.slug ? `/${parentEntry.slug}` : ""}/${newSlug}`
-          : `/${newSlug}`,
+        computedPath: computeFullSlugPath(chain, newSlug),
       } satisfies SitemapMetadata)
     }
   }
 
   const handleSetParent = async (parentId: string | null) => {
-    const parent = parentId ? allEntries.find((e) => e.id === parentId) ?? null : null
-    setParentEntry(parent)
-
     const metadataField = sdk.entry.fields["sitemapMetadata"]
     if (metadataField) {
+      const chain = buildParentChain(allEntries, parentId)
       const newMeta: SitemapMetadata = {
         parentEntryId: parentId,
-        computedPath: parentId
-          ? `/${parent?.slug ?? ""}/${slug}`
-          : `/${slug}`,
+        computedPath: computeFullSlugPath(chain, slug),
       }
       await metadataField.setValue(newMeta)
       setMetadata(newMeta)
@@ -214,6 +212,9 @@ export function EntryFieldLocation() {
     setFolderListOpen(false)
     setFolderSearch("")
   }
+
+  // Derive the full ancestor chain for badge display and URL computation
+  const parentChain = buildParentChain(allEntries, metadata?.parentEntryId ?? null)
 
   const filteredEntries = folderSearch.trim()
     ? allEntries.filter(
@@ -231,27 +232,29 @@ export function EntryFieldLocation() {
       <div className="space-y-2">
         <Label className="text-sm text-[var(--cf-gray-600)]">URL Slug</Label>
         <div className="flex items-center gap-1 p-2 border border-[var(--cf-gray-300)] rounded-md bg-white min-h-[36px] flex-wrap">
-          {/* Parent badge */}
-          {parentEntry && (
-            <span className="flex items-center gap-1">
+          {/* Parent chain badges — one per ancestor folder */}
+          {parentChain.map((folder, i) => (
+            <span key={folder.id} className="flex items-center gap-1">
               <Badge
                 variant="secondary"
                 className="bg-[var(--cf-blue-100)] text-[var(--cf-blue-600)] hover:bg-[var(--cf-blue-200)] px-2 py-0.5 text-xs font-mono flex items-center gap-1 shrink-0"
               >
                 <Folder className="h-3 w-3" />
-                {parentEntry.title}
-                <button
-                  type="button"
-                  onClick={() => handleSetParent(null)}
-                  className="ml-0.5 rounded-full hover:bg-[var(--cf-blue-300)] p-0.5 transition-colors"
-                  aria-label="Remove parent"
-                >
-                  <X className="h-2.5 w-2.5" />
-                </button>
+                {folder.title}
+                {i === parentChain.length - 1 && (
+                  <button
+                    type="button"
+                    onClick={() => handleSetParent(null)}
+                    className="ml-0.5 rounded-full hover:bg-[var(--cf-blue-300)] p-0.5 transition-colors"
+                    aria-label="Remove parent"
+                  >
+                    <X className="h-2.5 w-2.5" />
+                  </button>
+                )}
               </Badge>
               <span className="text-[var(--cf-gray-400)] text-sm font-mono">/</span>
             </span>
-          )}
+          ))}
           {/* Editable slug */}
           <Input
             value={slug}
