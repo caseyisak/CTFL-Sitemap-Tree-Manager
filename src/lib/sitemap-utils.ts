@@ -68,6 +68,7 @@ export function buildSitemapTree(entries: ContentfulPageEntry[]): SitemapNode {
       children: [],
       isExpanded: true,
       excludeFromSitemap: entry.excludeFromSitemap,
+      contentType: entry.contentType,
     }
     nodeMap.set(entry.id, node)
   }
@@ -132,6 +133,7 @@ export function buildSitemapTreeWithFolders(
       children: [],
       isExpanded: true,
       excludeFromSitemap: entry.excludeFromSitemap,
+      contentType: entry.contentType,
     })
   }
 
