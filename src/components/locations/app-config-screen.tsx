@@ -93,8 +93,10 @@ export function AppConfigScreen() {
   // robots.txt copy state
   const [copied, setCopied] = useState(false)
 
-  // "How it works" info box open state
+  // "How it works" info box open state (Managed Content Types section)
   const [showHowItWorks, setShowHowItWorks] = useState(false)
+  // "How it works" info box open state (Sitemap section)
+  const [showSitemapHowItWorks, setShowSitemapHowItWorks] = useState(false)
 
   // Keep handleConfigure ref fresh
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -896,6 +898,42 @@ export function AppConfigScreen() {
       {/* Sitemap section */}
       <section className="space-y-4">
         <h2 className="font-semibold text-[var(--cf-gray-700)]">Sitemap</h2>
+
+        {/* "How it works" collapsible — single sitemap vs sitemap index */}
+        <div className="rounded-md border border-[var(--cf-blue-200)] bg-[var(--cf-blue-50)]">
+          <button
+            onClick={() => setShowSitemapHowItWorks((v) => !v)}
+            className="flex items-center gap-2 w-full px-3 py-2 text-xs font-medium text-[var(--cf-blue-700)] hover:bg-[var(--cf-blue-100)] rounded-md transition-colors"
+          >
+            <Info className="h-3.5 w-3.5 shrink-0" />
+            <span className="flex-1 text-left">How it works — single sitemap vs. sitemap index</span>
+            {showSitemapHowItWorks ? <ChevronUp className="h-3.5 w-3.5 shrink-0" /> : <ChevronDown className="h-3.5 w-3.5 shrink-0" />}
+          </button>
+          {showSitemapHowItWorks && (
+            <div className="px-4 pb-3 pt-1 text-xs text-[var(--cf-gray-700)] space-y-2 border-t border-[var(--cf-blue-200)]">
+              <p>
+                Two modes are supported, controlled by the <strong>Child Sitemaps</strong> field on the root Sitemap entry:
+              </p>
+              <ul className="space-y-2 ml-3 list-disc list-outside">
+                <li>
+                  <strong>Single sitemap</strong> (no children) — generates one XML file at{" "}
+                  <code className="bg-white border border-[var(--cf-gray-200)] px-1 py-0.5 rounded">/{"{"}root slug{"}"}.xml</code>.
+                  {" "}Set <strong>Content Types</strong>, <strong>Change Frequency</strong>, and <strong>Priority</strong> on the root Sitemap entry.
+                </li>
+                <li>
+                  <strong>Sitemap index</strong> (one or more children) — generates a sitemap index at{" "}
+                  <code className="bg-white border border-[var(--cf-gray-200)] px-1 py-0.5 rounded">/{"{"}root slug{"}"}.xml</code>{" "}
+                  plus one URL list per child at{" "}
+                  <code className="bg-white border border-[var(--cf-gray-200)] px-1 py-0.5 rounded">/{"{"}child slug{"}"}.xml</code>.
+                  {" "}Set <strong>Content Types</strong>, <strong>Change Frequency</strong>, and <strong>Priority</strong> on each child entry — leave those fields empty on the root.
+                </li>
+              </ul>
+              <p className="text-[var(--cf-gray-500)]">
+                The <strong>Sitemap Type</strong> field on each entry shows its role: <code className="bg-white border border-[var(--cf-gray-200)] px-1 py-0.5 rounded">root</code> for the main entry, <code className="bg-white border border-[var(--cf-gray-200)] px-1 py-0.5 rounded">child</code> for sub-sitemaps. Your website reads this data from the Contentful Delivery API to generate the XML files.
+              </p>
+            </div>
+          )}
+        </div>
 
         {sitemapCtExists === null && (
           <p className="text-xs text-[var(--cf-gray-400)] italic">Checking for Sitemap content type…</p>
