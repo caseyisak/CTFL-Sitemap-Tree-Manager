@@ -59,7 +59,7 @@ const REQUIRED_SITEMAP_FIELDS = [
 export function AppConfigScreen() {
   const sdk = useSDK<ConfigAppSDK>()
 
-  const [baseUrl, setBaseUrl] = useState("https://smu.edu")
+  const [baseUrl, setBaseUrl] = useState("")
   const [contentTypes, setContentTypes] = useState<ContentTypeOption[]>([])
   const [enabledContentTypes, setEnabledContentTypes] = useState<string[]>([])
   const [contentTypeConfigs, setContentTypeConfigs] = useState<
@@ -171,7 +171,7 @@ export function AppConfigScreen() {
       ])
 
       if (params) {
-        setBaseUrl(params.baseUrl ?? "https://smu.edu")
+        setBaseUrl(params.baseUrl ?? "")
         setEnabledContentTypes(params.enabledContentTypes ?? [])
         setContentTypeConfigs(params.contentTypeConfigs ?? {})
       }

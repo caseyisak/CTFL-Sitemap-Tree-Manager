@@ -51,7 +51,7 @@ export function EntryFieldLocation() {
   useAutoResizer()
 
   const installation = sdk.parameters.installation as AppInstallationParameters
-  const baseUrl = installation?.baseUrl ?? "https://smu.edu"
+  const baseUrl = installation?.baseUrl ?? ""
   const isMetadataField = sdk.field.type === "Object"
 
   // All hooks must be called unconditionally — no early returns before this line

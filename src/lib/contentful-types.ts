@@ -13,7 +13,7 @@ export interface FolderNode {
 export interface AppInstallationParameters {
   enabledContentTypes: string[] // ['page', 'blogPost', ...]
   contentTypeConfigs: Record<string, ContentTypeConfig> // { page: { slugFieldId: 'slug' }, ... }
-  baseUrl: string // 'https://smu.edu'
+  baseUrl: string // e.g. 'https://example.com'
   /** ID of the Sitemap content type (auto-detected by name, may not be "sitemap") */
   sitemapContentTypeId?: string
   /**

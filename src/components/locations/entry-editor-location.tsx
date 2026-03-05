@@ -78,7 +78,7 @@ function collectDescendantPageIds(
 export function EntryEditorLocation() {
   const sdk = useSDK<EditorAppSDK>()
   const installation = sdk.parameters.installation as AppInstallationParameters
-  const baseUrl = installation?.baseUrl ?? "https://smu.edu"
+  const baseUrl = installation?.baseUrl ?? ""
   const enabledContentTypes = installation?.enabledContentTypes ?? []
   const contentTypeConfigs = installation?.contentTypeConfigs ?? {}
   const storedSitemapCtId = installation?.sitemapContentTypeId ?? null

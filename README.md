@@ -45,7 +45,7 @@ Open [http://localhost:5000](http://localhost:5000). Edit `src/app/page.tsx` and
 - **Parent path badges** in the URL slug field reflect the folder hierarchy (e.g., `[dashboard] / [company] / page-slug`)
 - **Badges update automatically** when pages are moved between folders via drag-and-drop or the "Move to folder" command
 - **Removable badges** &mdash; clicking the X on a badge moves the page up to the parent folder
-- **Full URL path** is dynamically composed from `https://smu.edu` + folder hierarchy + page slug
+- **Full URL path** is dynamically composed from your configured base URL + folder hierarchy + page slug
 - **"Move to folder" command** with searchable dropdown listing all available folders
 
 ### Page & Folder Management
