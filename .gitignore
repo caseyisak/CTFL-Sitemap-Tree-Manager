@@ -47,3 +47,6 @@ build-plan.md
 certs/
 # SpecStory explanation file
 .specstory/.what-is-this.md
+
+# Docs (local only)
+docs/
