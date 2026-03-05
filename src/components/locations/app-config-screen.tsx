@@ -301,7 +301,7 @@ export function AppConfigScreen() {
       // Auto-sync the contentTypes field's "Accept only specified values" list
       // to match the current enabledContentTypes. Runs silently on every save.
       await syncContentTypesValidation(sitemapCtId, enabledContentTypes)
-      await applyCheckboxAppearance(sitemapCtId)
+      await applyEditorInterfaceSettings(sitemapCtId)
       await applyOmittedFields(sitemapCtId)
     }
 
@@ -329,18 +329,46 @@ export function AppConfigScreen() {
   // ── CT and entry creation ──────────────────────────────────────────────────────
 
   /**
-   * Sets the `contentTypes` field widget on the Sitemap CT editor interface to
-   * "Checkbox" (builtin). Safe to call multiple times — skips if already set.
+   * Applies editor interface settings for the Sitemap CT:
+   * - `contentTypes` field: Checkbox widget + help text explaining single vs index mode
+   * - `sitemapType` field: help text explaining root vs child, and which fields to fill in
+   * Safe to call multiple times.
    */
-  const applyCheckboxAppearance = async (ctId: string) => {
+  const applyEditorInterfaceSettings = async (ctId: string) => {
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const ei = await (sdk.cma.editorInterface as any).get({ contentTypeId: ctId })
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const controls: Array<Record<string, any>> = ei.controls ?? []
-      if (controls.some((c) => c.fieldId === "contentTypes" && c.widgetId === "checkbox")) return
-      const updated = controls.filter((c) => c.fieldId !== "contentTypes")
-      updated.push({ fieldId: "contentTypes", widgetId: "checkbox", widgetNamespace: "builtin" })
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const desired: Record<string, Record<string, any>> = {
+        contentTypes: {
+          widgetId: "checkbox",
+          widgetNamespace: "builtin",
+          settings: {
+            helpText:
+              "Content types whose entries appear in this sitemap's generated XML. " +
+              "Single sitemap: set this on the root entry. " +
+              "Sitemap index: leave the root empty — set this on each child sitemap entry instead.",
+          },
+        },
+        sitemapType: {
+          settings: {
+            helpText:
+              '"root" — the primary sitemap entry. For a single sitemap, set Content Types, Change Frequency, and Priority directly here. ' +
+              "To generate multiple XML files (sitemap index), add entries to Child Sitemaps and configure those fields on each child instead. " +
+              '"child" — a sub-sitemap in an index. Set Content Types, Change Frequency, and Priority on this entry.',
+          },
+        },
+      }
+
+      const updated = controls.filter((c) => !(c.fieldId in desired))
+      for (const [fieldId, settings] of Object.entries(desired)) {
+        const existing = controls.find((c) => c.fieldId === fieldId) ?? {}
+        updated.push({ ...existing, fieldId, ...settings })
+      }
+
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await (sdk.cma.editorInterface as any).update(
         { contentTypeId: ctId },
@@ -352,8 +380,10 @@ export function AppConfigScreen() {
   }
 
   /**
-   * Sets `folderConfig` and `sitemapType` fields as omitted on the Sitemap CT editor interface
-   * so they don't appear in Contentful's raw Editor tab. Safe to call multiple times.
+   * Hides `folderConfig` (internal JSON) from the Sitemap CT editor interface.
+   * `sitemapType` is intentionally left visible so editors can see the help text.
+   * If `sitemapType` was previously omitted (older installs), this un-omits it.
+   * Safe to call multiple times.
    */
   const applyOmittedFields = async (ctId: string) => {
     try {
@@ -361,24 +391,23 @@ export function AppConfigScreen() {
       const ei = await (sdk.cma.editorInterface as any).get({ contentTypeId: ctId })
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const controls: Array<Record<string, any>> = ei.controls ?? []
-      const omittedIds = new Set(
-        controls.filter((c) => c.omitted).map((c) => c.fieldId)
-      )
-      if (omittedIds.has("folderConfig") && omittedIds.has("sitemapType")) return
+      const folderConfigOmitted = controls.some((c) => c.fieldId === "folderConfig" && c.omitted)
+      const sitemapTypeOmitted = controls.some((c) => c.fieldId === "sitemapType" && c.omitted)
+      // Already correct: folderConfig hidden, sitemapType visible
+      if (folderConfigOmitted && !sitemapTypeOmitted) return
+      // Filter out both, re-add only folderConfig as omitted.
+      // Omitting sitemapType from the controls list entirely = default (visible).
       const updated = controls.filter(
         (c) => c.fieldId !== "folderConfig" && c.fieldId !== "sitemapType"
       )
-      updated.push(
-        { fieldId: "folderConfig", omitted: true },
-        { fieldId: "sitemapType", omitted: true },
-      )
+      updated.push({ fieldId: "folderConfig", omitted: true })
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await (sdk.cma.editorInterface as any).update(
         { contentTypeId: ctId },
         { ...ei, controls: updated }
       )
     } catch (e) {
-      console.warn("Could not omit internal fields on Sitemap CT editor interface:", e)
+      console.warn("Could not update omitted fields on Sitemap CT editor interface:", e)
     }
   }
 
@@ -392,10 +421,12 @@ export function AppConfigScreen() {
       const ct = await sdk.cma.contentType.get({ contentTypeId: ctId })
       const hasField = (ct.fields ?? []).some((f) => f.id === "contentTypes")
       if (!hasField) return
+      // Never include the Sitemap CT itself as a selectable content type option
+      const filteredCtIds = ctIds.filter((id) => id !== ctId)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const updatedFields = (ct.fields ?? []).map((f: any) =>
         f.id === "contentTypes"
-          ? { ...f, items: { type: "Symbol", validations: ctIds.length ? [{ in: ctIds }] : [] } }
+          ? { ...f, items: { type: "Symbol", validations: filteredCtIds.length ? [{ in: filteredCtIds }] : [] } }
           : f
       )
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -485,7 +516,7 @@ export function AppConfigScreen() {
       const publishedCt = await sdk.cma.contentType.publish({ contentTypeId: ct.sys.id }, ct)
 
       // Set checkbox appearance for contentTypes field
-      await applyCheckboxAppearance(publishedCt.sys.id)
+      await applyEditorInterfaceSettings(publishedCt.sys.id)
 
       // Create root entry
       const entry = await sdk.cma.entry.create(
@@ -567,7 +598,7 @@ export function AppConfigScreen() {
 
       // If we just added contentTypes, also set checkbox appearance
       if (fieldDef.id === "contentTypes") {
-        await applyCheckboxAppearance(sitemapCtId)
+        await applyEditorInterfaceSettings(sitemapCtId)
       }
 
       setCreateStatus({ type: "success", msg: `Field "${fieldDef.name}" added.` })
