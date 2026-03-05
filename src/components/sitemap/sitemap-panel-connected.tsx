@@ -80,6 +80,7 @@ export function SitemapPanelWithCallback({
   const [dragState, setDragState] = useState<DragState>({
     isDragging: false,
     draggedNodeId: null,
+    draggedNodeIds: [],
     targetNodeId: null,
     dropPosition: null,
   })
@@ -191,18 +192,23 @@ export function SitemapPanelWithCallback({
   }, [onSelectNode, lastClickedNodeId, expandedNodes, searchQuery, sitemap])
 
   const handleDragStart = useCallback((nodeId: string) => {
+    // Drag all selected nodes if the dragged node is part of the selection;
+    // otherwise drag only this node and keep selection unchanged.
+    const nodesToDrag = selectedNodeIds.has(nodeId) ? [...selectedNodeIds] : [nodeId]
     setDragState({
       isDragging: true,
       draggedNodeId: nodeId,
+      draggedNodeIds: nodesToDrag,
       targetNodeId: null,
       dropPosition: null,
     })
-  }, [])
+  }, [selectedNodeIds])
 
   const handleDragEnd = useCallback(() => {
     setDragState({
       isDragging: false,
       draggedNodeId: null,
+      draggedNodeIds: [],
       targetNodeId: null,
       dropPosition: null,
     })
@@ -217,7 +223,14 @@ export function SitemapPanelWithCallback({
   }, [])
 
   const handleDrop = useCallback(() => {
-    if (!dragState.draggedNodeId || !dragState.targetNodeId || !dragState.dropPosition) {
+    // Support multi-select drag: use draggedNodeIds when available
+    const nodesToDrag = dragState.draggedNodeIds.length > 0
+      ? dragState.draggedNodeIds
+      : dragState.draggedNodeId
+        ? [dragState.draggedNodeId]
+        : []
+
+    if (!nodesToDrag.length || !dragState.targetNodeId || !dragState.dropPosition) {
       return
     }
 
@@ -237,29 +250,35 @@ export function SitemapPanelWithCallback({
       return parts.length > 0 ? parts[parts.length - 1] : fullSlug
     }
 
+    // Step 1: Collect all dragged nodes in depth-first tree order (preserves relative ordering)
+    const draggedIds = new Set(nodesToDrag)
+    const draggedNodes: SitemapNode[] = []
+    const collectInOrder = (node: SitemapNode) => {
+      if (draggedIds.has(node.id)) draggedNodes.push(node)
+      for (const child of node.children) collectInOrder(child)
+    }
+    collectInOrder(newSitemap)
+
+    if (!draggedNodes.length) return
+
+    // Step 2: Remove all dragged nodes from the tree in one pass
+    const removeAllDragged = (node: SitemapNode): boolean => {
+      const before = node.children.length
+      node.children = node.children.filter((c) => !draggedIds.has(c.id))
+      const removed = node.children.length < before
+      return node.children.some(removeAllDragged) || removed
+    }
+    removeAllDragged(newSitemap)
+
+    // Step 3: Normalize slugs on all dragged nodes
+    draggedNodes.forEach((n) => { n.slug = extractPageSlug(n.slug) })
+
+    // Step 4: Determine effective drop position
     const targetNode = findNode(newSitemap, dragState.targetNodeId)
     const isTargetFolder = targetNode && (targetNode.type === "section" || targetNode.type === "root")
-
     const effectivePosition = isTargetFolder && dragState.dropPosition === "inside"
       ? "inside"
       : dragState.dropPosition
-
-    let draggedNode: SitemapNode | null = null
-    const removeNode = (node: SitemapNode): boolean => {
-      const index = node.children.findIndex((c) => c.id === dragState.draggedNodeId)
-      if (index !== -1) {
-        draggedNode = node.children[index]
-        node.children.splice(index, 1)
-        return true
-      }
-      return node.children.some(removeNode)
-    }
-    removeNode(newSitemap)
-
-    if (!draggedNode) return
-    const node = draggedNode as SitemapNode
-
-    node.slug = extractPageSlug(node.slug)
 
     const getDepth = (node: SitemapNode, targetId: string, depth = 0): number => {
       if (node.id === targetId) return depth
@@ -275,29 +294,32 @@ export function SitemapPanelWithCallback({
       return 1 + Math.max(...node.children.map(getMaxChildDepth))
     }
 
+    // For depth checks, use the deepest node in the dragged set
+    const maxDraggedDepth = Math.max(...draggedNodes.map(getMaxChildDepth))
+
     let insertedSuccessfully = false
 
-    const insertNode = (parent: SitemapNode): boolean => {
+    // Step 5: Insert all dragged nodes at the target position (maintaining collected order)
+    const insertNodes = (parent: SitemapNode): boolean => {
       const targetIndex = parent.children.findIndex((c) => c.id === dragState.targetNodeId)
 
       if (targetIndex !== -1) {
         if (effectivePosition === "before") {
-          parent.children.splice(targetIndex, 0, node)
+          parent.children.splice(targetIndex, 0, ...draggedNodes)
           insertedSuccessfully = true
           return true
         } else if (effectivePosition === "after") {
-          parent.children.splice(targetIndex + 1, 0, node)
+          parent.children.splice(targetIndex + 1, 0, ...draggedNodes)
           insertedSuccessfully = true
           return true
         } else if (effectivePosition === "inside") {
-          const targetNode = parent.children[targetIndex]
-          const targetDepth = getDepth(newSitemap, targetNode.id)
-          const draggedMaxDepth = getMaxChildDepth(node)
-          if (targetDepth + draggedMaxDepth + 1 >= MAX_DEPTH) {
+          const targetChild = parent.children[targetIndex]
+          const targetDepth = getDepth(newSitemap, targetChild.id)
+          if (targetDepth + maxDraggedDepth + 1 >= MAX_DEPTH) {
             alert(`Cannot move: Maximum hierarchy depth of ${MAX_DEPTH} would be exceeded.`)
             return false
           }
-          targetNode.children.push(node)
+          targetChild.children.push(...draggedNodes)
           insertedSuccessfully = true
           return true
         }
@@ -305,26 +327,23 @@ export function SitemapPanelWithCallback({
 
       if (parent.id === dragState.targetNodeId && effectivePosition === "inside") {
         const targetDepth = getDepth(newSitemap, parent.id)
-        const draggedMaxDepth = getMaxChildDepth(node)
-        if (targetDepth + draggedMaxDepth + 1 >= MAX_DEPTH) {
+        if (targetDepth + maxDraggedDepth + 1 >= MAX_DEPTH) {
           alert(`Cannot move: Maximum hierarchy depth of ${MAX_DEPTH} would be exceeded.`)
           return false
         }
-        parent.children.push(node)
+        parent.children.push(...draggedNodes)
         insertedSuccessfully = true
         return true
       }
 
       for (const child of parent.children) {
-        if (insertNode(child)) {
-          return true
-        }
+        if (insertNodes(child)) return true
       }
 
       return false
     }
 
-    insertNode(newSitemap)
+    insertNodes(newSitemap)
 
     if (insertedSuccessfully) {
       onSitemapChange(newSitemap)

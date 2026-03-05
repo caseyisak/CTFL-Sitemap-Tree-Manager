@@ -171,19 +171,18 @@ export function EntryEditorLocation() {
 
   const saveFolderConfig = useCallback(async (newFolders: FolderNode[]) => {
     const entryId = sitemapEntryIdRef.current
-    if (!entryId) {
-      setFolders(newFolders)
-      return
-    }
+    // Optimistic local update — ensures folderConfigRef stays current even before CMA confirms
+    setFolders(newFolders)
+    if (!entryId) return  // no Sitemap entry yet — local-only
     try {
       const entry = await sdk.cma.entry.get({ entryId })
       await sdk.cma.entry.update(
         { entryId },
         { ...entry, fields: { ...entry.fields, folderConfig: { "en-US": newFolders } } }
       )
-      setFolders(newFolders)
     } catch (e) {
       console.error("Failed to save folderConfig:", e)
+      setSaveStatus("error")
     }
   }, [sdk])
 
@@ -476,6 +475,13 @@ export function EntryEditorLocation() {
 
       const currentFolders = folderConfigRef.current
       const folderIds = new Set(currentFolders.map((f) => f.id))
+      // Also accept any section-type node in the new tree — catches folders
+      // created this session whose CMA save may still be in-flight or failed
+      const addTreeSectionIds = (node: SitemapNode) => {
+        if (node.type === "section") folderIds.add(node.id)
+        node.children.forEach(addTreeSectionIds)
+      }
+      addTreeSectionIds(newSitemap)
 
       const changedPages = changed.filter(({ id }) => realEntryIds.has(id))
       const changedFolders = changed.filter(({ id }) =>

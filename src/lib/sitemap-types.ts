@@ -14,6 +14,8 @@ export interface SitemapNode {
 export interface DragState {
   isDragging: boolean
   draggedNodeId: string | null
+  /** All node IDs being dragged (multi-select). Single drag → length 1. */
+  draggedNodeIds: string[]
   targetNodeId: string | null
   dropPosition: 'before' | 'after' | 'inside' | null
 }
