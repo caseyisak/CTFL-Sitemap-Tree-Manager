@@ -99,8 +99,8 @@ export function SitemapPanelWithCallback({
   const [allExpanded, setAllExpanded] = useState(false)
   /** "this" = show only this child's CT entries; "full" = show all (with greyed-out non-members) */
   const [scopeMode, setScopeMode] = useState<"this" | "full">(defaultScopeMode ?? "full")
-  /** True when scoped mode UX should be active — either open entry IS a child sitemap, or page entry's CT belongs to one */
-  const inScopedMode = isChildSitemap || (!!childContentTypes && childContentTypes.length > 0)
+  /** Scoped mode only activates when the open entry IS a child Sitemap entry */
+  const inScopedMode = !!isChildSitemap
 
   function getAllExpandedIds(node: SitemapNode): string[] {
     const ids: string[] = []
@@ -676,37 +676,8 @@ export function SitemapPanelWithCallback({
           />
         </div>
 
-        {/* Child sitemap scope toggle */}
-        {inScopedMode && (
-          <div className="flex items-center rounded-md border border-[var(--cf-gray-200)] bg-white overflow-hidden text-xs">
-            <button
-              onClick={() => setScopeMode("this")}
-              className={cn(
-                "flex-1 px-3 py-1.5 font-medium transition-colors",
-                scopeMode === "this"
-                  ? "bg-[var(--cf-blue-500)] text-white"
-                  : "text-[var(--cf-gray-600)] hover:bg-[var(--cf-gray-50)]"
-              )}
-            >
-              This sitemap only
-            </button>
-            <button
-              onClick={() => setScopeMode("full")}
-              className={cn(
-                "flex-1 px-3 py-1.5 font-medium transition-colors border-l border-[var(--cf-gray-200)]",
-                scopeMode === "full"
-                  ? "bg-[var(--cf-blue-500)] text-white"
-                  : "text-[var(--cf-gray-600)] hover:bg-[var(--cf-gray-50)]"
-              )}
-            >
-              Full site tree
-            </button>
-          </div>
-        )}
-
-        {/* Row 2: Expand/Collapse toggle | Add folder | Show excluded */}
+        {/* Row 2: Expand/Collapse | Scope toggle (Sitemap entries only) | Show excluded | spacer | Add folder */}
         <div className="flex items-center gap-2">
-          {/* Single expand/collapse toggle */}
           <Button
             variant="outline"
             size="sm"
@@ -726,6 +697,40 @@ export function SitemapPanelWithCallback({
             )}
           </Button>
 
+          {inScopedMode && (
+            <Button
+              variant={scopeMode === "this" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setScopeMode((s) => s === "this" ? "full" : "this")}
+              className={cn(
+                "h-8 text-xs shrink-0",
+                scopeMode === "this"
+                  ? "bg-[var(--cf-blue-500)] hover:bg-[var(--cf-blue-600)] text-white"
+                  : "bg-transparent"
+              )}
+              title={scopeMode === "this" ? "Showing this sitemap only — click for full tree" : "Showing full tree — click for this sitemap only"}
+            >
+              {scopeMode === "this" ? "This sitemap" : "All sitemaps"}
+            </Button>
+          )}
+
+          <Button
+            variant={showExcluded ? "default" : "outline"}
+            size="sm"
+            onClick={() => setShowExcluded((v) => !v)}
+            className={cn(
+              "h-8 text-xs shrink-0",
+              showExcluded
+                ? "bg-[var(--cf-orange-500)] hover:bg-[var(--cf-orange-500)] text-white"
+                : "bg-transparent"
+            )}
+            title="Show only excluded pages"
+          >
+            {showExcluded ? "Excluded only" : "Show excluded"}
+          </Button>
+
+          <div className="flex-1" />
+
           <Button
             onClick={() => handleOpenAddFolder(null)}
             variant="outline"
@@ -734,23 +739,6 @@ export function SitemapPanelWithCallback({
           >
             <Folder className="mr-1 h-3 w-3" />
             Add folder
-          </Button>
-
-          <div className="flex-1" />
-
-          <Button
-            variant={showExcluded ? "default" : "outline"}
-            size="sm"
-            onClick={() => setShowExcluded((v) => !v)}
-            className={cn(
-              "h-8 text-xs shrink-0 w-[124px] justify-center",
-              showExcluded
-                ? "bg-[var(--cf-orange-500)] hover:bg-[var(--cf-orange-500)] text-white"
-                : "bg-transparent"
-            )}
-            title="Show only excluded pages"
-          >
-            {showExcluded ? "Excluded only" : "Show excluded"}
           </Button>
         </div>
       </div>
