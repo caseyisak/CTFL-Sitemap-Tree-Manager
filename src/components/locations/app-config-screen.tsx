@@ -678,12 +678,15 @@ export function AppConfigScreen() {
     })
   }
 
+  /** Strip a trailing .xml extension from a slug to prevent double .xml.xml in display URLs. */
+  const normalizeSlug = (slug: string) => slug.replace(/\.xml$/i, "")
+
   const setSlugField = (ctId: string, slugFieldId: string) => {
     setContentTypeConfigs((prev) => ({ ...prev, [ctId]: { slugFieldId } }))
   }
 
   const handleCopyRobotsTxt = () => {
-    const snippet = `Sitemap: ${baseUrl}/${rootEntry?.slug ?? "sitemap-index"}.xml`
+    const snippet = `Sitemap: ${baseUrl}/${normalizeSlug(rootEntry?.slug ?? "sitemap-index")}.xml`
     navigator.clipboard.writeText(snippet).then(() => {
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
@@ -998,7 +1001,7 @@ export function AppConfigScreen() {
                     <div>
                       <p className="text-sm font-medium text-[var(--cf-gray-700)]">{rootEntry.internalName}</p>
                       <p className="text-xs text-[var(--cf-gray-500)] font-mono mt-0.5">
-                        {baseUrl}/{rootEntry.slug}.xml
+                        {baseUrl}/{normalizeSlug(rootEntry.slug)}.xml
                       </p>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
@@ -1076,7 +1079,7 @@ export function AppConfigScreen() {
                           <div>
                             <p className="text-sm font-medium text-[var(--cf-gray-700)]">{child.internalName}</p>
                             <p className="text-xs text-[var(--cf-gray-500)] font-mono">
-                              {baseUrl}/{child.slug}.xml
+                              {baseUrl}/{normalizeSlug(child.slug)}.xml
                             </p>
                           </div>
                           <div className="flex items-center gap-2 shrink-0">
@@ -1137,7 +1140,7 @@ export function AppConfigScreen() {
                   </p>
                   <div className="flex items-center gap-2">
                     <code className="flex-1 text-xs bg-[var(--cf-gray-100)] border border-[var(--cf-gray-200)] px-3 py-2 rounded font-mono text-[var(--cf-gray-700)]">
-                      Sitemap: {baseUrl}/{rootEntry.slug}.xml
+                      Sitemap: {baseUrl}/{normalizeSlug(rootEntry.slug)}.xml
                     </code>
                     <Button
                       variant="outline"
@@ -1186,7 +1189,10 @@ export function AppConfigScreen() {
                 <span className="text-xs text-[var(--cf-gray-500)] shrink-0">.xml</span>
               </div>
               <p className="text-xs text-[var(--cf-gray-500)]">
-                URL: {baseUrl}/{childSlug || "sitemap-blog"}.xml
+                Do not include <code>.xml</code> — it is appended automatically.
+              </p>
+              <p className="text-xs text-[var(--cf-gray-500)]">
+                URL: {baseUrl}/{normalizeSlug(childSlug) || "sitemap-blog"}.xml
               </p>
             </div>
             <div className="space-y-2">

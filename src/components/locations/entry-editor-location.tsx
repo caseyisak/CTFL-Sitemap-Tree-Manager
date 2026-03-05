@@ -261,6 +261,22 @@ export function EntryEditorLocation() {
               setThisChildContentTypes(ctIds)
             }
           }
+
+          // When viewing a page entry, find which child sitemap covers its CT (if any)
+          if (!isSitemapEntry) {
+            const currentCT = sdk.entry.getSys().contentType.sys.id
+            const childSitemapItems = items.filter((e) => {
+              const t = loc((e.fields as Record<string, unknown>)?.sitemapType) as string | null
+              return t === "child"
+            })
+            for (const child of childSitemapItems) {
+              const ctIds = (loc((child.fields as Record<string, unknown>)?.contentTypes) as string[] | undefined) ?? []
+              if (ctIds.includes(currentCT)) {
+                setThisChildContentTypes(ctIds)
+                break
+              }
+            }
+          }
         }
       } catch { /* no sitemap entry available yet */ }
 
@@ -427,10 +443,12 @@ export function EntryEditorLocation() {
           parentEntryId: existingMeta?.parentEntryId ?? null,
           computedPath: newPath,
         }
-        await sdk.cma.entry.update(
-          { entryId: pageId },
-          { ...pageEntry, fields: { ...pageEntry.fields, sitemapMetadata: { "en-US": newMeta } } }
-        )
+        if (pageId !== currentEntryId) {
+          await sdk.cma.entry.update(
+            { entryId: pageId },
+            { ...pageEntry, fields: { ...pageEntry.fields, sitemapMetadata: { "en-US": newMeta } } }
+          )
+        }
         if (pageId === currentEntryId) {
           await writeCurrentEntryMeta(newMeta)
         }
@@ -492,10 +510,12 @@ export function EntryEditorLocation() {
             computedPath: computeFullPath(newSitemap, id),
           }
 
-          await sdk.cma.entry.update(
-            { entryId: id },
-            { ...entry, fields: { ...entry.fields, sitemapMetadata: { "en-US": newMeta } } }
-          )
+          if (id !== currentEntryId) {
+            await sdk.cma.entry.update(
+              { entryId: id },
+              { ...entry, fields: { ...entry.fields, sitemapMetadata: { "en-US": newMeta } } }
+            )
+          }
           // Notify the field editor iframe so its onValueChanged fires immediately
           if (id === currentEntryId) {
             await writeCurrentEntryMeta(newMeta)
@@ -882,6 +902,10 @@ export function EntryEditorLocation() {
 
   // ─── Derived state ────────────────────────────────────────────────────────────
 
+  /** Default scope mode for the panel: "this" when a page entry's CT belongs to a child sitemap. */
+  const defaultScopeMode: "this" | "full" =
+    !isSitemapEntry && thisChildContentTypes.length > 0 ? "this" : "full"
+
   const derivedSelectedNode = sitemap && selectedNodeId ? findNode(sitemap, selectedNodeId) : null
   const selectedEntry = selectedNodeId ? entries.find((e) => e.id === selectedNodeId) ?? null : null
 
@@ -980,6 +1004,7 @@ export function EntryEditorLocation() {
             sitemapName={sitemapEntryName}
             isChildSitemap={isChildSitemap}
             childContentTypes={thisChildContentTypes}
+            defaultScopeMode={defaultScopeMode}
             allContentTypes={enabledContentTypes}
             onAddContentTypeToChild={handleAddContentTypeToChild}
             onRemoveContentTypeFromChild={handleRemoveContentTypeFromChild}

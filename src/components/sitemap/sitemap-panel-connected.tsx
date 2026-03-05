@@ -43,6 +43,8 @@ interface SitemapPanelProps {
   onAddContentTypeToChild?: (ctId: string) => Promise<void>
   /** Called when a member node's "Remove from this sitemap" action is triggered */
   onRemoveContentTypeFromChild?: (ctId: string) => Promise<void>
+  /** Initial scope mode — "this" when a page entry's CT belongs to a child sitemap */
+  defaultScopeMode?: "this" | "full"
   onRenameEntry?: (nodeId: string, newTitle: string) => Promise<void>
   onDuplicateEntry?: (nodeId: string) => Promise<void>
   onDeleteEntry?: (nodeId: string) => Promise<void>
@@ -62,6 +64,7 @@ export function SitemapPanelWithCallback({
   allContentTypes,
   onAddContentTypeToChild,
   onRemoveContentTypeFromChild,
+  defaultScopeMode,
   onRenameEntry,
   onDuplicateEntry,
   onDeleteEntry,
@@ -94,7 +97,9 @@ export function SitemapPanelWithCallback({
   const [creatingFolder, setCreatingFolder] = useState(false)
   const [allExpanded, setAllExpanded] = useState(false)
   /** "this" = show only this child's CT entries; "full" = show all (with greyed-out non-members) */
-  const [scopeMode, setScopeMode] = useState<"this" | "full">("full")
+  const [scopeMode, setScopeMode] = useState<"this" | "full">(defaultScopeMode ?? "full")
+  /** True when scoped mode UX should be active — either open entry IS a child sitemap, or page entry's CT belongs to one */
+  const inScopedMode = isChildSitemap || (!!childContentTypes && childContentTypes.length > 0)
 
   function getAllExpandedIds(node: SitemapNode): string[] {
     const ids: string[] = []
@@ -530,7 +535,7 @@ export function SitemapPanelWithCallback({
 
   /** Returns true if a page node's content type is not in the child sitemap's owned CTs */
   const isNodeOutOfScope = (node: SitemapNode): boolean => {
-    if (!isChildSitemap || !childContentTypes) return false
+    if (!inScopedMode || !childContentTypes) return false
     if (node.type !== "page") return false
     if (!node.contentType) return false
     return !childContentTypes.includes(node.contentType)
@@ -552,7 +557,7 @@ export function SitemapPanelWithCallback({
   const displayedSitemap = (() => {
     let result = searchQuery ? filterNodes(sitemap, searchQuery) || sitemap : sitemap
     if (showExcluded) result = filterExcluded(result) || result
-    if (isChildSitemap && scopeMode === "this" && childContentTypes) {
+    if (inScopedMode && scopeMode === "this" && childContentTypes) {
       result = filterToScope(result) || result
     }
     return result
@@ -653,7 +658,7 @@ export function SitemapPanelWithCallback({
         </div>
 
         {/* Child sitemap scope toggle */}
-        {isChildSitemap && (
+        {inScopedMode && (
           <div className="flex items-center rounded-md border border-[var(--cf-gray-200)] bg-white overflow-hidden text-xs">
             <button
               onClick={() => setScopeMode("this")}
@@ -766,7 +771,7 @@ export function SitemapPanelWithCallback({
           selectedNodeIds={selectedNodeIds}
           currentPageId={currentPageId}
           sitemapName={sitemapName}
-          isNodeOutOfScope={isChildSitemap && scopeMode === "full" ? isNodeOutOfScope : undefined}
+          isNodeOutOfScope={inScopedMode && scopeMode === "full" ? isNodeOutOfScope : undefined}
           onAddToSitemap={onAddContentTypeToChild}
           expandedNodes={searchQuery ? new Set(getAllNodeIds(displayedSitemap)) : expandedNodes}
           dragState={dragState}
