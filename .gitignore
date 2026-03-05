@@ -48,5 +48,6 @@ certs/
 # SpecStory explanation file
 .specstory/.what-is-this.md
 
-# Docs (local only)
+# Docs and local planning (local only)
 docs/
+TODO.md
