@@ -1,6 +1,7 @@
 {
   "id": "sitemap-tree-manager",
   "name": "Sitemap Tree Manager",
+  "src": "https://ctfl-sitemap-tree-manager.vercel.app",
   "locations": [
     { "location": "app-config" },
     {
