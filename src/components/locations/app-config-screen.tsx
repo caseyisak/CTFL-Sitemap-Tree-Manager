@@ -1097,38 +1097,13 @@ export function AppConfigScreen() {
                   <p className="text-xs text-[var(--cf-gray-500)]">Root sitemap index</p>
                 </div>
 
-                {/* Mode detection banner */}
-                {childSitemaps.length === 0 ? (
+                {/* Single sitemap mode banner — only shown when no children */}
+                {childSitemaps.length === 0 && (
                   <div className="flex items-start gap-3 p-3 rounded-md border border-[var(--cf-blue-200)] bg-[var(--cf-blue-50)]">
                     <FileText className="h-4 w-4 text-[var(--cf-blue-500)] shrink-0 mt-0.5" />
                     <div className="text-xs text-[var(--cf-gray-700)] space-y-0.5">
                       <p className="font-semibold text-[var(--cf-blue-700)]">Single Sitemap Mode</p>
                       <p>This sitemap covers all your enabled content types in one XML file. To switch to a sitemap index (multiple XML files), add child sitemaps below.</p>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex items-start gap-3 p-3 rounded-md border border-[var(--cf-orange-200)] bg-[var(--cf-orange-50)]">
-                    <FolderOpen className="h-4 w-4 text-[var(--cf-orange-500)] shrink-0 mt-0.5" />
-                    <div className="text-xs text-[var(--cf-gray-700)] space-y-1">
-                      <p className="font-semibold text-[var(--cf-orange-700)]">Sitemap Index Mode ({childSitemaps.length} {childSitemaps.length === 1 ? "child" : "children"})</p>
-                      <p>This entry generates a sitemap index file. Each child sitemap should have Content Types, Change Frequency, and Priority configured.</p>
-                      {childSitemaps.some((c) => !c.contentTypes.length || !c.changeFrequency || c.priority === null) && (
-                        <ul className="mt-1 space-y-0.5">
-                          {childSitemaps.filter((c) => !c.contentTypes.length || !c.changeFrequency || c.priority === null).map((c) => {
-                            const missing = [
-                              ...(!c.contentTypes.length ? ["Content Types"] : []),
-                              ...(!c.changeFrequency ? ["Change Frequency"] : []),
-                              ...(c.priority === null ? ["Priority"] : []),
-                            ]
-                            return (
-                              <li key={c.id} className="flex items-center gap-1 text-[var(--cf-orange-700)]">
-                                <AlertCircle className="h-3 w-3 shrink-0" />
-                                <span><span className="font-medium">{c.internalName}</span> — missing: {missing.join(", ")}</span>
-                              </li>
-                            )
-                          })}
-                        </ul>
-                      )}
                     </div>
                   </div>
                 )}
@@ -1139,6 +1114,39 @@ export function AppConfigScreen() {
                     <h3 className="text-xs font-semibold text-[var(--cf-gray-600)] uppercase tracking-wide">
                       Child Sitemaps
                     </h3>
+
+                    {/* Child sitemaps detected notification */}
+                    <div className="rounded-md border border-[var(--cf-blue-200)] bg-[var(--cf-blue-50)] px-3 py-2.5 flex items-start gap-2">
+                      <Info className="h-3.5 w-3.5 text-[var(--cf-blue-500)] shrink-0 mt-0.5" />
+                      <div className="text-xs text-[var(--cf-gray-700)] space-y-1 flex-1">
+                        <p className="font-medium text-[var(--cf-blue-700)]">
+                          {childSitemaps.length === 1
+                            ? "1 child sitemap detected"
+                            : `${childSitemaps.length} child sitemaps detected`}
+                        </p>
+                        <p>This root entry generates a sitemap index file. Each child sitemap should have Content Types, Change Frequency, and Priority configured.</p>
+                        {childSitemaps.some((c) => !c.contentTypes.length || !c.changeFrequency || c.priority === null) && (
+                          <ul className="mt-1 space-y-0.5">
+                            {childSitemaps
+                              .filter((c) => !c.contentTypes.length || !c.changeFrequency || c.priority === null)
+                              .map((c) => {
+                                const missing = [
+                                  ...(!c.contentTypes.length ? ["Content Types"] : []),
+                                  ...(!c.changeFrequency ? ["Change Frequency"] : []),
+                                  ...(c.priority === null ? ["Priority"] : []),
+                                ]
+                                return (
+                                  <li key={c.id} className="flex items-center gap-1 text-[var(--cf-orange-700)]">
+                                    <AlertCircle className="h-3 w-3 shrink-0" />
+                                    <span><span className="font-medium">{c.internalName}</span> — missing: {missing.join(", ")}</span>
+                                  </li>
+                                )
+                              })}
+                          </ul>
+                        )}
+                      </div>
+                    </div>
+
                     {childSitemaps.map((child) => (
                       <div
                         key={child.id}
