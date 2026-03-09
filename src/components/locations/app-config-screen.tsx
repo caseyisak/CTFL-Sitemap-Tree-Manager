@@ -319,7 +319,8 @@ export function AppConfigScreen() {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const updatedCt = await sdk.cma.contentType.update(
             { contentTypeId: ctId },
-            { ...ct, fields: updatedFields, fieldGroups: updatedGroups } as any
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          { ...ct, fields: updatedFields, fieldGroups: updatedGroups } as any // fieldGroups not in SDK types
           )
           await sdk.cma.contentType.publish({ contentTypeId: ctId }, updatedCt)
         }
@@ -615,7 +616,7 @@ export function AppConfigScreen() {
 
       // Build field object based on type
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let newField: Record<string, any> = {
+      const newField: Record<string, any> = {
         id: fieldDef.id,
         name: fieldDef.name,
         type: fieldDef.type,
