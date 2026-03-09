@@ -1,139 +1,186 @@
-# CTFL-sitemap-tree-manager
+# Sitemap Tree Manager
 
-**Sitemap Manager** — An interactive, navigable tree-structure sitemap editor built for Contentful-like content management systems. Next.js (App Router) with **Bun**. Enables content teams to visually organize, reorder, and restructure site hierarchies through drag-and-drop with real-time URL path resolution.
+A **Contentful App** that gives content editors a visual, drag-and-drop interface for managing their site's URL hierarchy — and writes structured metadata back to Contentful so your website can generate accurate XML sitemaps automatically.
 
-## Getting started
+> **This app is a data layer, not a sitemap generator.** It stores `sitemapMetadata` and `excludeFromSitemap` on your content entries. Your website reads that data via the Contentful Delivery API and generates the XML. See [docs/developer-guide.md](docs/developer-guide.md) for the full integration guide.
+
+---
+
+## What it does
+
+| Feature | Description |
+|---|---|
+| Visual tree editor | Drag-and-drop pages and folders to reorder/nest them |
+| Folder hierarchy | Organize pages into URL-path-aware folders (stored as JSON, not entries) |
+| URL path resolution | Computes `computedPath` for every page based on its position in the tree |
+| Exclude from sitemap | Toggle to hide individual pages from XML output |
+| Multi-sitemap support | Configure a root sitemap (single mode) or a sitemap index with child sitemaps |
+| App Config screen | Set base URL, enable content types, manage child sitemaps, get robots.txt snippet |
+| Entry Field widget | Inline folder picker with breadcrumb badges showing the full ancestor chain |
+| Scoped tree view | When editing a page, the tree automatically scopes to the relevant child sitemap |
+
+---
+
+## App locations
+
+The app registers three Contentful locations:
+
+| Location | Purpose |
+|---|---|
+| **App Config** | Space-level setup: base URL, managed content types, sitemap entry management |
+| **Entry Editor** | Full-width tree panel shown when editing any managed content type |
+| **Entry Field** | Inline slug/folder picker embedded in the entry sidebar |
+
+---
+
+## Sitemap modes
+
+**Single sitemap** — No child sitemaps configured. The root Sitemap entry holds `contentTypes`, `changeFrequency`, and `priority`. Your website serves one `<urlset>` XML file.
+
+**Sitemap index** — One or more child Sitemap entries linked. The root serves a `<sitemapindex>` pointing to each child's URL. Each child entry holds its own `contentTypes`, `changeFrequency`, and `priority`.
+
+Your website detects the mode at runtime — see [docs/developer-guide.md](docs/developer-guide.md).
+
+---
+
+## Getting started (development)
+
+### Prerequisites
+
+- [Bun](https://bun.sh) 1.3+
+- A Contentful space with API keys
+- [Contentful CLI](https://www.contentful.com/developers/docs/tutorials/cli/installation/) or the Contentful web app to install the app
+
+### Install & run
 
 ```bash
 bun install
-bun dev
+bun dev          # starts on http://localhost:5000
 ```
 
-Open [http://localhost:5000](http://localhost:5000). Edit `src/app/page.tsx` and the page will hot-reload.
+### Install in Contentful
+
+Contentful Apps must be served over HTTPS. For local development, expose your dev server with a tunneling tool:
+
+```bash
+# Option A — localhost.run (no install)
+ssh -R 80:localhost:5000 localhost.run
+
+# Option B — ngrok
+ngrok http 5000
+```
+
+Then in your Contentful space:
+
+1. **Apps → Manage apps → Create app**
+2. Set the App URL to your tunnel URL (or `http://localhost:5000` for Contentful's own tunneling)
+3. Upload `contentful-app-manifest.json` or configure locations manually
+4. Install the app to your space
+5. Open **App Config** to complete setup
+
+---
 
 ## Scripts
 
-| Command         | Description              |
-| --------------- | ------------------------ |
-| `bun dev`       | Start dev server         |
-| `bun run build` | Production build         |
-| `bun run start` | Start production server  |
-| `bun run lint`  | Run ESLint               |
+| Command | Description |
+|---|---|
+| `bun dev` | Start dev server on port 5000 |
+| `bun run build` | Production build |
+| `bun run start` | Start production server |
+| `bun run lint` | Run ESLint |
+| `bun run test` | Run tests (Vitest) |
+| `bun run test:watch` | Run tests in watch mode |
 
-## Features
+---
 
-### Tree Navigation & Hierarchy
+## Data written to Contentful
 
-- **Collapsible tree view** with expand/collapse toggles for folders and sections
-- **Breadcrumb navigation** showing the current page's position within the hierarchy
-- **Search filtering** that auto-expands matching paths in the tree
-- **Expand all / Collapse all** toolbar controls
-- **Maximum nesting depth** of 5 levels with enforcement and user feedback
+### On managed page entries
 
-### Drag-and-Drop
+```ts
+// entry.fields.sitemapMetadata  →  JSON object
+interface SitemapMetadata {
+  parentEntryId: string | null  // folder ID or parent page entry ID
+  computedPath: string          // e.g. "/blog/my-post"
+}
 
-- **Reorder pages** by dragging before or after sibling nodes
-- **Nest into folders** by dropping onto the middle zone of a folder node (70% of the target area defaults to "inside" placement)
-- **Move parent nodes** with all their children intact
-- **Circular reference prevention** so a parent cannot be dragged into its own descendants
-- **Visual drop indicators** showing before, after, or inside placement
-- **Grip handle affordance** appears on hover for each draggable node
-- **Auto-expand** target folders after a successful drop
-
-### Dynamic URL Slug System
-
-- **Parent path badges** in the URL slug field reflect the folder hierarchy (e.g., `[dashboard] / [company] / page-slug`)
-- **Badges update automatically** when pages are moved between folders via drag-and-drop or the "Move to folder" command
-- **Removable badges** &mdash; clicking the X on a badge moves the page up to the parent folder
-- **Full URL path** is dynamically composed from your configured base URL + folder hierarchy + page slug
-- **"Move to folder" command** with searchable dropdown listing all available folders
-
-### Page & Folder Management
-
-- **Add new pages** at any level through the toolbar or context menu
-- **Add new folders** via a dedicated button or the right-click context menu on existing folders
-- **Rename** nodes inline through the context menu
-- **Duplicate** pages to quickly scaffold similar content
-- **Delete** nodes with confirmation
-- **Undo / Redo** history for all structural changes
-
-### Details Panel
-
-- **Title field** dynamically controls the page name displayed in the tree header
-- **URL Slug field** with interactive folder badges and editable slug segment
-- **Full URL Path** (read-only) showing the resolved URL based on hierarchy + slug
-- **Status selector** (Published, Draft, Changed) with color-coded indicators
-- **Metadata section** showing created/modified dates, author, and entry ID
-- **Taxonomy & Classification** section with concepts, tags, and categories
-
-### Visual Design
-
-- **Forma36 design system** color palette for a native Contentful application aesthetic
-- **Status indicators** with colored dots (green = published, yellow = draft/changed)
-- **Node type icons** distinguishing pages, folders, and root nodes
-- **Current page badge** highlighting the active page in the tree
-- **Responsive layout** with mobile toggle between tree and details views
-
-## Tech Stack
-
-| Layer   | Technology                                      |
-| ------- | ----------------------------------------------- |
-| Framework | Next.js 16 (App Router)                        |
-| Language  | TypeScript                                    |
-| Styling   | Tailwind CSS v4 with Forma36 design tokens    |
-| UI Components | shadcn/ui (Radix UI primitives)           |
-| Icons    | Lucide React                                   |
-| State    | React `useState` with derived state pattern    |
-
-## Project Structure
-
-```
-app/
-  page.tsx                          # Main page: state management, node selection, move logic
-  layout.tsx                        # Root layout with metadata
-  globals.css                       # Forma36 design tokens + Tailwind config
-
-components/sitemap/
-  tree-node.tsx                     # Recursive tree node with drag-and-drop handling
-  sitemap-panel-connected.tsx       # Sitemap tree panel: toolbar, search, undo/redo, add dialogs
-  details-panel.tsx                 # Right-side details panel: title, slug, URL, metadata, taxonomy
-
-lib/
-  sitemap-types.ts                  # TypeScript interfaces (SitemapNode, DragState, TreeContext) and seed data
-  utils.ts                          # Utility functions (cn class merger)
+// entry.fields.excludeFromSitemap  →  boolean
 ```
 
-## Data Model
+### On the root Sitemap entry (`content_type: "sitemap"`)
 
-```typescript
-interface SitemapNode {
-  id: string
+```ts
+// entry.fields.folderConfig  →  FolderNode[]
+interface FolderNode {
+  id: string             // "folder-<timestamp>-<rand>"
   title: string
-  slug: string          // Page-level slug only (e.g., "my-tasks"), not the full path
-  type: 'root' | 'section' | 'page'
-  status: 'published' | 'draft' | 'changed'
-  children: SitemapNode[]
-  isExpanded?: boolean
+  slug: string           // URL segment
+  parentId: string | null
 }
 ```
 
-The full URL path is derived at render time from the node's position in the tree hierarchy combined with its slug. Moving a node between folders automatically updates its resolved URL without mutating the slug.
+Child Sitemap entries hold `contentTypes`, `changeFrequency`, and `priority` — same fields used by the root entry in single mode.
 
-## Design Decisions
+---
 
-- **Derived state over synced state**: The selected node is stored as an ID and derived from the sitemap tree on each render. This avoids infinite update loops from syncing a full node object via `useEffect`.
-- **Slug-only storage**: Each node stores only its own slug segment. The full URL path is computed from the breadcrumb hierarchy, so moving a node automatically resolves the correct URL.
-- **Folder-biased drop zones**: When dragging over a folder, 70% of the node area triggers an "inside" drop, with only the extreme top/bottom edges (15% each) allowing before/after sibling placement.
-- **Forma36 tokens as CSS variables**: The color system uses CSS custom properties mapped to Contentful's Forma36 palette for theming and extension.
+## Tech stack
 
-## Learn more
+| Layer | Technology |
+|---|---|
+| Framework | Next.js 16 (App Router) |
+| Language | TypeScript |
+| Styling | Tailwind CSS v4 with Forma36 design tokens |
+| UI | shadcn/ui (Radix UI primitives) |
+| Icons | Lucide React |
+| Contentful | `@contentful/app-sdk`, `@contentful/react-apps-toolkit`, `contentful-management` |
 
-- [Next.js docs](https://nextjs.org/docs)
-- [Bun](https://bun.sh/docs)
+---
 
-## Deploy
+## Project structure
 
-[Vercel](https://vercel.com/new?filter=next.js) is the simplest way to deploy. See [Next.js deployment](https://nextjs.org/docs/app/building-your-application/deploying).
+```
+contentful-app-manifest.json      # App manifest (locations, parameters)
+
+src/
+  app/
+    page.tsx                      # SSR-safe shell (dynamic import, ssr: false)
+    layout.tsx
+    globals.css                   # Forma36 tokens + Tailwind config
+
+  components/
+    app-with-sdk.tsx              # SDKProvider + location router
+    locations/
+      app-config-screen.tsx       # App Config location
+      entry-editor-location.tsx   # Entry Editor location
+      entry-field-location.tsx    # Entry Field location
+    sitemap/
+      sitemap-panel-connected.tsx # Tree panel: toolbar, search, drag-drop, dialogs
+      tree-node.tsx               # Recursive tree node
+      details-panel.tsx           # Right-side details (slug, URL, exclude toggle)
+
+  lib/
+    sitemap-types.ts              # TypeScript interfaces + FolderNode helpers
+    sitemap-utils.ts              # Tree utilities (build, filter, path computation)
+    contentful-types.ts           # Shared Contentful field type helpers
+
+docs/
+  developer-guide.md              # Website integration guide (XML generation, route handler)
+```
+
+---
+
+## Website integration
+
+See [docs/developer-guide.md](docs/developer-guide.md) for:
+
+- How to install the Contentful JS SDK
+- Shared helper functions (`getRootSitemapEntry`, `fetchPageEntries`, `buildUrlset`)
+- A unified Next.js route handler that covers single + index mode
+- Route registration options to avoid conflicts with page routes
+- Caching / ISR recommendations
+- robots.txt setup
+
+---
 
 ## License
 

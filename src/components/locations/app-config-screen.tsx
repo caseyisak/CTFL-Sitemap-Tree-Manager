@@ -28,6 +28,20 @@ import { Globe, LayoutGrid, Plus, CheckCircle2, AlertCircle, ExternalLink, Copy,
 
 const CHANGE_FREQ_OPTIONS = ["always", "hourly", "daily", "weekly", "monthly", "yearly", "never"] as const
 
+/** Extract a human-readable message from any thrown value (including non-Error CMA responses). */
+function extractErrorMsg(e: unknown): string {
+  if (e instanceof Error) return e.message
+  if (e !== null && typeof e === "object") {
+    const obj = e as Record<string, unknown>
+    if (typeof obj.message === "string") return obj.message
+    if (typeof obj.details === "object" && obj.details !== null) {
+      return JSON.stringify(obj.details)
+    }
+    return JSON.stringify(e)
+  }
+  return String(e)
+}
+
 interface ContentTypeOption {
   id: string
   name: string
@@ -277,10 +291,35 @@ export function AppConfigScreen() {
           })
         }
 
-        if (fieldsToAdd.length > 0) {
+        const SITEMAP_GROUP_ID = "sitemapInfo"
+        const SITEMAP_GROUP_NAME = "Sitemap Info"
+        const sitemapFieldIds = new Set(["sitemapMetadata", "excludeFromSitemap"])
+
+        // Assign groupId to both sitemap fields (new and existing)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const updatedFields = [...(ct.fields ?? []), ...fieldsToAdd].map((f: any) =>
+          sitemapFieldIds.has(f.id) ? { ...f, groupId: SITEMAP_GROUP_ID } : f
+        )
+
+        // Add the field group if not already present
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const existingGroups: Array<{ id: string; name: string }> = (ct as any).fieldGroups ?? []
+        const hasGroup = existingGroups.some((g) => g.id === SITEMAP_GROUP_ID)
+        const updatedGroups = hasGroup
+          ? existingGroups
+          : [...existingGroups, { id: SITEMAP_GROUP_ID, name: SITEMAP_GROUP_NAME }]
+
+        // Check if any sitemap field is missing its groupId
+        const missingGroupId = (ct.fields ?? []).some(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (f: any) => sitemapFieldIds.has(f.id) && f.groupId !== SITEMAP_GROUP_ID
+        )
+
+        if (fieldsToAdd.length > 0 || !hasGroup || missingGroupId) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const updatedCt = await sdk.cma.contentType.update(
             { contentTypeId: ctId },
-            { ...ct, fields: [...(ct.fields ?? []), ...fieldsToAdd] }
+            { ...ct, fields: updatedFields, fieldGroups: updatedGroups } as any
           )
           await sdk.cma.contentType.publish({ contentTypeId: ctId }, updatedCt)
         }
@@ -450,6 +489,30 @@ export function AppConfigScreen() {
       const spaceId = sdk.ids.space
       const environmentId = sdk.ids.environment ?? "master"
 
+      // Guard: if the CT already exists (e.g. from a previous partial attempt),
+      // recover state rather than failing with 422.
+      try {
+        const existing = await sdk.cma.contentType.get({ contentTypeId: "sitemap" })
+        if (existing) {
+          setSitemapCtId(existing.sys.id)
+          setSitemapCtExists(true)
+          setExistingFieldIds(new Set((existing.fields ?? []).map((f: { id: string }) => f.id)))
+          // Try to load any existing entries
+          const entryResponse = await sdk.cma.entry.getMany({
+            query: { content_type: "sitemap", limit: 10 },
+          })
+          const items = (entryResponse.items ?? []) as Array<{
+            sys: { id: string; publishedVersion?: number }
+            fields: Record<string, unknown>
+          }>
+          if (items.length > 0) await resolveRootAndChildren(items)
+          setCreateStatus({ type: "success", msg: "Sitemap CT already exists — loaded successfully." })
+          return
+        }
+      } catch {
+        // CT doesn't exist yet — proceed with creation below
+      }
+
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const ct = await (sdk.cma.contentType as any).createWithId(
         { contentTypeId: "sitemap", spaceId, environmentId },
@@ -458,24 +521,21 @@ export function AppConfigScreen() {
           displayField: "internalName",
           fields: [
             { id: "internalName", name: "Internal Name", type: "Symbol", required: true, localized: false },
-            { id: "slug", name: "Slug", type: "Symbol", required: false, localized: false, helpText: "URL slug for the generated XML file (e.g. sitemap-index → /sitemap-index.xml)" },
+            { id: "slug", name: "Slug", type: "Symbol", required: false, localized: false },
             {
               id: "sitemapType",
               name: "Sitemap Type",
               type: "Symbol",
               required: false,
               localized: false,
-              helpText: "Managed by the app. 'root' = main sitemap or index; 'child' = sub-sitemap.",
               validations: [{ in: ["root", "child"] }],
             },
-            { id: "folderConfig", name: "Folder Config", type: "Object", required: false, localized: false, helpText: "Managed by the Sitemap & Tree Manager app. Do not edit manually." },
             {
               id: "childSitemaps",
               name: "Child Sitemaps",
               type: "Array",
               required: false,
               localized: false,
-              helpText: "Link child sitemap entries here when using a sitemap index structure.",
               items: {
                 type: "Link",
                 linkType: "Entry",
@@ -488,7 +548,6 @@ export function AppConfigScreen() {
               type: "Array",
               required: false,
               localized: false,
-              helpText: "Content types whose entries appear in this sitemap. Managed by the tree view.",
               items: {
                 type: "Symbol",
                 validations: enabledContentTypes.length ? [{ in: enabledContentTypes }] : [],
@@ -500,7 +559,6 @@ export function AppConfigScreen() {
               type: "Symbol",
               required: false,
               localized: false,
-              helpText: "How often pages in this sitemap are expected to change (used in generated XML).",
               validations: [{ in: ["always", "hourly", "daily", "weekly", "monthly", "yearly", "never"] }],
             },
             {
@@ -509,9 +567,9 @@ export function AppConfigScreen() {
               type: "Number",
               required: false,
               localized: false,
-              helpText: "Priority 0.0–1.0 relative to other pages (used in generated XML).",
               validations: [{ range: { min: 0, max: 1 } }],
             },
+            { id: "folderConfig", name: "Folder Config", type: "Object", required: false, localized: false },
           ],
         }
       )
@@ -540,7 +598,7 @@ export function AppConfigScreen() {
       setSelectedEntryId(entry.sys.id)
       setCreateStatus({ type: "success", msg: `Sitemap CT and root entry created.` })
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e)
+      const msg = extractErrorMsg(e)
       setCreateStatus({ type: "error", msg })
     } finally {
       setCreating(false)
@@ -564,17 +622,6 @@ export function AppConfigScreen() {
         required: false,
         localized: false,
       }
-      const HELP_TEXT_MAP: Record<string, string> = {
-        slug: "URL slug for the generated XML file (e.g. sitemap-index → /sitemap-index.xml)",
-        sitemapType: "Managed by the app. 'root' = main sitemap or index; 'child' = sub-sitemap.",
-        folderConfig: "Managed by the Sitemap & Tree Manager app. Do not edit manually.",
-        childSitemaps: "Link child sitemap entries here when using a sitemap index structure.",
-        contentTypes: "Content types whose entries appear in this sitemap. Managed by the tree view.",
-        changeFrequency: "How often pages in this sitemap are expected to change (used in generated XML).",
-        priority: "Priority 0.0–1.0 relative to other pages (used in generated XML).",
-      }
-      if (HELP_TEXT_MAP[fieldDef.id]) newField.helpText = HELP_TEXT_MAP[fieldDef.id]
-
       if (fieldDef.id === "sitemapType") {
         newField.validations = [{ in: ["root", "child"] }]
       } else if (fieldDef.id === "childSitemaps") {
@@ -605,7 +652,7 @@ export function AppConfigScreen() {
 
       setCreateStatus({ type: "success", msg: `Field "${fieldDef.name}" added.` })
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e)
+      const msg = extractErrorMsg(e)
       setCreateStatus({ type: "error", msg })
     } finally {
       setCreating(false)
@@ -637,7 +684,7 @@ export function AppConfigScreen() {
       setSelectedEntryId(entry.sys.id)
       setCreateStatus({ type: "success", msg: `Root entry created.` })
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e)
+      const msg = extractErrorMsg(e)
       setCreateStatus({ type: "error", msg })
     } finally {
       setCreating(false)
@@ -697,7 +744,7 @@ export function AppConfigScreen() {
       setChildContentTypes([])
       setAddChildStatus({ type: "success", msg: "Child sitemap created and linked to root." })
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e)
+      const msg = extractErrorMsg(e)
       setAddChildStatus({ type: "error", msg })
     } finally {
       setAddingChild(false)

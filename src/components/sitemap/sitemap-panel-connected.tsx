@@ -4,6 +4,7 @@ import type React from "react"
 import { useState, useCallback } from "react"
 import type { SitemapNode, DragState } from "@/lib/sitemap-types"
 import { MAX_DEPTH } from "@/lib/sitemap-types"
+import { slugify } from "@/lib/sitemap-utils"
 import { TreeNode } from "./tree-node"
 import { cn } from "@/lib/utils"
 import {
@@ -489,7 +490,12 @@ export function SitemapPanelWithCallback({
 
     const newSitemap = JSON.parse(JSON.stringify(sitemap)) as SitemapNode
     const renameNode = (node: SitemapNode): boolean => {
-      if (node.id === nodeId) { node.title = renameValue; return true }
+      if (node.id === nodeId) {
+        node.title = renameValue
+        // For folders (sections), also update the slug so computedPath stays correct
+        if (node.type === "section") node.slug = slugify(renameValue)
+        return true
+      }
       return node.children.some(renameNode)
     }
     renameNode(newSitemap)
@@ -561,12 +567,27 @@ export function SitemapPanelWithCallback({
   }
 
   /** Filter tree to only nodes whose contentType is in childContentTypes (plus folders with matching descendants) */
+  /** Returns true if this subtree contains any page nodes (regardless of CT). */
+  const hasPageDescendants = (node: SitemapNode): boolean =>
+    node.children.some((c) => c.type === "page" || hasPageDescendants(c))
+
   const filterToScope = (node: SitemapNode): SitemapNode | null => {
     if (node.type === "root" || node.type === "section") {
       const filteredChildren = node.children
         .map(filterToScope)
         .filter((c): c is SitemapNode => c !== null)
-      if (filteredChildren.length > 0) return { ...node, children: filteredChildren, isExpanded: true }
+
+      if (filteredChildren.length > 0) {
+        // Has matching content (pages or sub-folders with matching content) — show
+        return { ...node, children: filteredChildren, isExpanded: true }
+      }
+
+      // No matching children after filter. Keep empty folders (they have no pages
+      // yet and could be used by this sitemap). Hide folders that have pages but
+      // none match this sitemap's CTs — those belong exclusively to other sitemaps.
+      if (!hasPageDescendants(node)) {
+        return { ...node, children: [], isExpanded: true }
+      }
       return null
     }
     if (!node.contentType || !childContentTypes?.includes(node.contentType)) return null

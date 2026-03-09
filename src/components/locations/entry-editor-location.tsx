@@ -355,20 +355,43 @@ export function EntryEditorLocation() {
   const currentEntryId = !isSitemapEntry ? sdk.entry.getSys().id : null
 
   // ─── Subscribe to sitemapMetadata changes from the field editor ───────────────
-  // When the field editor moves this entry to a different folder, re-fetch so the
-  // sitemap tree reflects the change. Guard with isSavingMetaRef to skip our own writes.
+  // When the field editor moves this entry to a different folder, move the node
+  // in-memory instead of re-fetching from CMA (which would be stale — the entry
+  // isn't saved to Contentful yet, so CMA still has the old parentEntryId).
   useEffect(() => {
     if (isSitemapEntry) return
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const metaField = (sdk.entry as any)?.fields?.["sitemapMetadata"]
     if (!metaField?.onValueChanged) return
-    const unsub = metaField.onValueChanged(() => {
+    const thisEntryId = sdk.entry.getSys().id
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const unsub = metaField.onValueChanged((val: any) => {
       if (isSavingMetaRef.current) return
-      fetchEntries()
+      const newParentId: string | null = (val as { parentEntryId?: string | null } | undefined)?.parentEntryId ?? null
+      const moveInTree = (tree: SitemapNode): SitemapNode => {
+        let extracted: SitemapNode | null = null
+        const remove = (node: SitemapNode): SitemapNode => ({
+          ...node,
+          children: node.children.flatMap((c) => {
+            if (c.id === thisEntryId) { extracted = c; return [] }
+            return [remove(c)]
+          }),
+        })
+        const withoutEntry = remove(tree)
+        if (!extracted) return tree
+        const targetId = newParentId ?? "root"
+        const insert = (node: SitemapNode): SitemapNode => {
+          if (node.id === targetId) return { ...node, children: [...node.children, extracted!] }
+          return { ...node, children: node.children.map(insert) }
+        }
+        return insert(withoutEntry)
+      }
+      setSitemap((prev) => prev ? moveInTree(prev) : prev)
+      setOriginalSitemap((prev) => prev ? moveInTree(JSON.parse(JSON.stringify(prev))) : prev)
     })
     return () => unsub?.()
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSitemapEntry, fetchEntries, sdk])
+  }, [isSitemapEntry, sdk])
 
   // Subscribe to excludeFromSitemap changes from the Editor tab radio button
   useEffect(() => {
@@ -488,7 +511,23 @@ export function EntryEditorLocation() {
         !realEntryIds.has(id) && id !== "root" && folderIds.has(id)
       )
 
-      if (changedPages.length === 0 && changedFolders.length === 0) return
+      // Also detect folders whose slug changed (e.g. after a rename)
+      const collectFolderSlugs = (node: SitemapNode, map: Map<string, string>) => {
+        if (node.type === "section") map.set(node.id, node.slug)
+        node.children.forEach((c) => collectFolderSlugs(c, map))
+      }
+      const oldFolderSlugs = new Map<string, string>()
+      const newFolderSlugs = new Map<string, string>()
+      collectFolderSlugs(originalSitemap, oldFolderSlugs)
+      collectFolderSlugs(newSitemap, newFolderSlugs)
+      const slugChangedFolderIds: string[] = []
+      for (const [id, newSlug] of newFolderSlugs) {
+        if (oldFolderSlugs.has(id) && oldFolderSlugs.get(id) !== newSlug) {
+          slugChangedFolderIds.push(id)
+        }
+      }
+
+      if (changedPages.length === 0 && changedFolders.length === 0 && slugChangedFolderIds.length === 0) return
 
       setSaveStatus("saving")
       try {
@@ -528,16 +567,31 @@ export function EntryEditorLocation() {
           }
         }
 
-        if (changedFolders.length > 0) {
+        if (changedFolders.length > 0 || slugChangedFolderIds.length > 0) {
+          // Sync folder config — apply parent changes AND slug/title renames
+          const findInTree = (root: SitemapNode, id: string): SitemapNode | null => {
+            if (root.id === id) return root
+            for (const c of root.children) { const r = findInTree(c, id); if (r) return r }
+            return null
+          }
           const updatedFolders = currentFolders.map((f) => {
-            const change = changedFolders.find((c) => c.id === f.id)
-            if (change) return { ...f, parentId: change.newParentId }
-            return f
+            const parentChange = changedFolders.find((c) => c.id === f.id)
+            const needsSync = parentChange || slugChangedFolderIds.includes(f.id)
+            const treeNode = needsSync ? findInTree(newSitemap, f.id) : null
+            return {
+              ...f,
+              ...(parentChange ? { parentId: parentChange.newParentId } : {}),
+              ...(treeNode ? { slug: treeNode.slug, title: treeNode.title } : {}),
+            }
           })
           await saveFolderConfig(updatedFolders)
 
-          // Cascade computedPath to all page entries under each re-parented folder
+          // Cascade computedPath to all page entries under moved folders
           for (const { id: folderId } of changedFolders) {
+            await cascadePathUpdates(newSitemap, folderId, realEntryIds)
+          }
+          // Cascade computedPath to all page entries under renamed folders
+          for (const folderId of slugChangedFolderIds) {
             await cascadePathUpdates(newSitemap, folderId, realEntryIds)
           }
         }

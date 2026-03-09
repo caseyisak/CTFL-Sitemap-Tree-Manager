@@ -216,15 +216,40 @@ export function EntryFieldLocation() {
   // Derive the full ancestor chain for badge display and URL computation
   const parentChain = buildParentChain(allEntries, metadata?.parentEntryId ?? null)
 
-  const filteredEntries = folderSearch.trim()
-    ? allEntries.filter(
+  const currentParentId = metadata?.parentEntryId ?? null
+
+  // Build tree-ordered list with depth for each folder (parents before their children)
+  const treeOrderedEntries: Array<ParentEntry & { depth: number; fullPath: string }> = (() => {
+    const depthMap = new Map<string, number>()
+    const getDepth = (id: string): number => {
+      if (depthMap.has(id)) return depthMap.get(id)!
+      const folder = allEntries.find((f) => f.id === id)
+      if (!folder || !folder.parentId) { depthMap.set(id, 0); return 0 }
+      const d = getDepth(folder.parentId) + 1
+      depthMap.set(id, d)
+      return d
+    }
+    const buildOrder = (parentId: string | null): typeof treeOrderedEntries => {
+      return allEntries
+        .filter((e) => e.parentId === parentId)
+        .flatMap((e) => {
+          const depth = getDepth(e.id)
+          const chain = buildParentChain(allEntries, e.parentId)
+          const fullPath = computeFullSlugPath(chain, e.slug ?? "")
+          return [{ ...e, depth, fullPath }, ...buildOrder(e.id)]
+        })
+    }
+    return buildOrder(null)
+  })()
+
+  const isSearching = folderSearch.trim().length > 0
+  const filteredEntries = isSearching
+    ? treeOrderedEntries.filter(
         (e) =>
           e.title.toLowerCase().includes(folderSearch.toLowerCase()) ||
-          (e.slug ?? "").toLowerCase().includes(folderSearch.toLowerCase())
+          e.fullPath.toLowerCase().includes(folderSearch.toLowerCase())
       )
-    : allEntries
-
-  const currentParentId = metadata?.parentEntryId ?? null
+    : treeOrderedEntries
 
   return (
     <div className="p-3 space-y-4">
@@ -319,13 +344,15 @@ export function EntryFieldLocation() {
                 </button>
                 {filteredEntries.map((entry) => {
                   const isCurrent = currentParentId === entry.id
+                  const indentPx = isSearching ? 0 : entry.depth * 16
                   return (
                     <button
                       key={entry.id}
                       type="button"
                       title={`folder ID: ${entry.id}`}
                       onClick={() => handleSetParent(entry.id)}
-                      className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-[var(--cf-gray-50)] transition-colors ${
+                      style={{ paddingLeft: `${12 + indentPx}px` }}
+                      className={`w-full flex items-center gap-2 pr-3 py-2 text-sm text-left hover:bg-[var(--cf-gray-50)] transition-colors ${
                         isCurrent ? "bg-[var(--cf-blue-50)]" : ""
                       }`}
                     >
@@ -338,9 +365,9 @@ export function EntryFieldLocation() {
                           Current
                         </span>
                       )}
-                      {!isCurrent && entry.slug && (
+                      {!isCurrent && (
                         <span className="text-xs text-[var(--cf-gray-400)] font-mono shrink-0">
-                          /{entry.slug}
+                          {entry.fullPath}
                         </span>
                       )}
                     </button>
