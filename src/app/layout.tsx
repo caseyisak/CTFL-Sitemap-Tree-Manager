@@ -37,10 +37,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <head>
-        <meta http-equiv="Content-Security-Policy" content="frame-ancestors 'self' https://app.contentful.com https://app.eu.contentful.com" />
-      </head>
-      <body className={`font-sans antialiased`}>
+<body className={`font-sans antialiased`}>
         {children}
         <Analytics />
       </body>

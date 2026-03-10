@@ -106,12 +106,18 @@ Any static file host works (Vercel, S3, Cloudflare Pages, etc.). Point the App D
 
 ### Security headers
 
-Frame embedding is restricted via a CSP meta tag in `src/app/layout.tsx` (static exports can't use HTTP headers):
+The `frame-ancestors` CSP directive must be delivered as an **HTTP response header** — browsers explicitly ignore it when set via a `<meta>` tag. For Vercel hosting, `vercel.json` sets it on all routes:
 
-```html
-<meta http-equiv="Content-Security-Policy"
-      content="frame-ancestors 'self' https://app.contentful.com https://app.eu.contentful.com" />
+```json
+{
+  "headers": [{ "source": "/(.*)", "headers": [
+    { "key": "Content-Security-Policy",
+      "value": "frame-ancestors 'self' https://app.contentful.com https://app.eu.contentful.com" }
+  ]}]
+}
 ```
+
+For other hosts, configure the equivalent response header. Contentful App Hosting sets this automatically.
 
 ---
 
