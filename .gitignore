@@ -51,3 +51,7 @@ certs/
 # Docs and local planning (local only)
 docs/
 TODO.md
+
+# Excalidraw diagram skill (local clone)
+.claude/skills/excalidraw-diagram
+excalidraw-diagram-skill/
