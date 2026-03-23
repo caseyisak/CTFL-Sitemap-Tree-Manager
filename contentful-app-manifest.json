@@ -4,6 +4,7 @@
   "src": "https://ctfl-sitemap-tree-manager.vercel.app",
   "locations": [
     { "location": "app-config" },
+    { "location": "page" },
     {
       "location": "entry-field",
       "fieldTypes": [{ "name": "Symbol" }, { "name": "Object" }]
