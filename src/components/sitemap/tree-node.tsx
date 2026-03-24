@@ -295,6 +295,7 @@ export function TreeNode({
               onToggleExpand(node.id)
             }}
             className="p-0.5 rounded hover:bg-[var(--cf-gray-200)] transition-colors"
+            data-fs-id="node-expand-toggle"
           >
             {isExpanded ? (
               <ChevronDown className="h-4 w-4 text-[var(--cf-gray-500)]" />
@@ -313,6 +314,7 @@ export function TreeNode({
         <button
           onClick={(e) => onSelect(node.id, { shift: e.shiftKey, meta: e.metaKey || e.ctrlKey })}
           title={isOutOfScope ? "Not in this sitemap" : undefined}
+          data-fs-id="node-select"
           className={cn(
             "flex-1 flex items-center gap-2 text-left rounded px-2 py-1 min-w-0",
             getTypeColor()
@@ -339,6 +341,7 @@ export function TreeNode({
               variant="ghost"
               size="sm"
               className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
+              data-fs-id="node-actions-menu"
             >
               <MoreHorizontal className="h-4 w-4 text-[var(--cf-gray-500)]" />
             </Button>
@@ -346,7 +349,7 @@ export function TreeNode({
           <DropdownMenuContent align="end" className="w-48">
             {isOutOfScope && onAddToSitemap && node.contentType && (
               <>
-                <DropdownMenuItem onClick={() => onAddToSitemap(node.contentType!)}>
+                <DropdownMenuItem onClick={() => onAddToSitemap(node.contentType!)} data-fs-id="context-add-to-sitemap">
                   <Plus className="mr-2 h-4 w-4" />
                   Add to this sitemap
                 </DropdownMenuItem>
@@ -355,24 +358,24 @@ export function TreeNode({
             )}
             {canHaveChildren && (
               <>
-                <DropdownMenuItem onClick={() => onAddChild(node.id, "section")}>
+                <DropdownMenuItem onClick={() => onAddChild(node.id, "section")} data-fs-id="context-add-folder">
                   <Folder className="mr-2 h-4 w-4" />
                   Add folder
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
               </>
             )}
-            <DropdownMenuItem onClick={() => onRename(node.id)}>
+            <DropdownMenuItem onClick={() => onRename(node.id)} data-fs-id="context-rename">
               <Edit3 className="mr-2 h-4 w-4" />
               Rename
             </DropdownMenuItem>
             {!isRoot && (
-              <DropdownMenuItem onClick={() => onDuplicate(node.id)}>
+              <DropdownMenuItem onClick={() => onDuplicate(node.id)} data-fs-id="context-duplicate">
                 <Copy className="mr-2 h-4 w-4" />
                 Duplicate
               </DropdownMenuItem>
             )}
-            <DropdownMenuItem onClick={() => onOpenNewTab(node.id)}>
+            <DropdownMenuItem onClick={() => onOpenNewTab(node.id)} data-fs-id="context-open-new-tab">
               <ExternalLink className="mr-2 h-4 w-4" />
               Open in new tab
             </DropdownMenuItem>
@@ -382,6 +385,7 @@ export function TreeNode({
                 <DropdownMenuItem
                   onClick={() => onDelete(node.id)}
                   className="text-[var(--cf-red-500)] focus:text-[var(--cf-red-500)]"
+                  data-fs-id="context-delete"
                 >
                   <Trash2 className="mr-2 h-4 w-4" />
                   Delete

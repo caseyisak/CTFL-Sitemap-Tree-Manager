@@ -841,6 +841,7 @@ export function AppConfigScreen() {
           <button
             onClick={() => setShowHowItWorks((v) => !v)}
             className="flex items-center gap-2 w-full px-3 py-2 text-xs font-medium text-[var(--cf-blue-700)] hover:bg-[var(--cf-blue-100)] rounded-md transition-colors"
+            data-fs-id="how-it-works-fields-toggle"
           >
             <Info className="h-3.5 w-3.5 shrink-0" />
             <span className="flex-1 text-left">How it works — sitemapMetadata &amp; excludeFromSitemap</span>
@@ -884,6 +885,7 @@ export function AppConfigScreen() {
                       role="switch"
                       aria-checked={isEnabled}
                       onClick={() => toggleContentType(ct.id)}
+                      data-fs-id={`toggle-ct-${ct.id}`}
                       className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
                         isEnabled ? "bg-[var(--cf-blue-500)]" : "bg-[var(--cf-gray-300)]"
                       }`}
@@ -952,6 +954,7 @@ export function AppConfigScreen() {
           <button
             onClick={() => setShowSitemapHowItWorks((v) => !v)}
             className="flex items-center gap-2 w-full px-3 py-2 text-xs font-medium text-[var(--cf-blue-700)] hover:bg-[var(--cf-blue-100)] rounded-md transition-colors"
+            data-fs-id="how-it-works-sitemap-toggle"
           >
             <Info className="h-3.5 w-3.5 shrink-0" />
             <span className="flex-1 text-left">How it works — single sitemap vs. sitemap index</span>
@@ -1002,6 +1005,7 @@ export function AppConfigScreen() {
                 onClick={handleCreateSitemapContentType}
                 disabled={creating}
                 className="bg-transparent"
+                data-fs-id="create-sitemap-ct"
               >
                 <Plus className="mr-1.5 h-3.5 w-3.5" />
                 {creating ? "Creating…" : "Create Sitemap content type"}
@@ -1045,6 +1049,7 @@ export function AppConfigScreen() {
                       onClick={() => handleAddField(f)}
                       disabled={creating}
                       className="h-7 text-xs bg-transparent shrink-0"
+                      data-fs-id={`add-field-${f.id}`}
                     >
                       {creating ? "Adding…" : "Add field"}
                     </Button>
@@ -1101,6 +1106,7 @@ export function AppConfigScreen() {
                     onClick={handleCreateRootEntry}
                     disabled={creating}
                     className="bg-transparent"
+                    data-fs-id="create-root-entry"
                   >
                     <Plus className="mr-1.5 h-3.5 w-3.5" />
                     {creating ? "Creating…" : "Create root Sitemap entry"}
@@ -1247,6 +1253,7 @@ export function AppConfigScreen() {
                   size="sm"
                   onClick={() => setShowAddChildDialog(true)}
                   className="bg-transparent"
+                  data-fs-id="add-child-sitemap-open"
                 >
                   <Plus className="mr-1.5 h-3.5 w-3.5" />
                   Add child sitemap
@@ -1273,6 +1280,7 @@ export function AppConfigScreen() {
                       onClick={handleCopyRobotsTxt}
                       className="bg-transparent shrink-0 h-8 w-8 p-0"
                       title="Copy to clipboard"
+                      data-fs-id="copy-robots-txt"
                     >
                       {copied ? <Check className="h-3.5 w-3.5 text-[var(--cf-green-500)]" /> : <Copy className="h-3.5 w-3.5" />}
                     </Button>
@@ -1357,6 +1365,7 @@ export function AppConfigScreen() {
               onClick={handleAddChildSitemap}
               disabled={addingChild || !childName.trim() || !childSlug.trim()}
               className="bg-[var(--cf-blue-500)] hover:bg-[var(--cf-blue-600)]"
+              data-fs-id="add-child-sitemap-confirm"
             >
               {addingChild ? "Creating…" : "Create child sitemap"}
             </Button>
