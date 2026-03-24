@@ -4,6 +4,8 @@ A **Contentful App** that gives content editors a visual, drag-and-drop interfac
 
 > **This app is a data layer, not a sitemap generator.** It stores `sitemapMetadata` and `excludeFromSitemap` on your content entries. Your website reads that data via the Contentful Delivery API and generates the XML.
 
+**Integrating with your website?** See the [Developer Integration Guide](./DEVELOPER-GUIDE.md) for CDA query patterns, XML route examples, dynamic routing, and Content Preview setup.
+
 ---
 
 ## What it does
