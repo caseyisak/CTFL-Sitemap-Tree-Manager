@@ -260,7 +260,6 @@ export function AppConfigScreen() {
   // ── keep onConfigure fresh via ref ────────────────────────────────────────────
 
   const handleConfigure = useCallback(async () => {
-    const currentState = await sdk.app.getCurrentState()
     const editorInterfaceAssignments: AppState["EditorInterface"] = {}
 
     for (const ctId of enabledContentTypes) {
@@ -358,14 +357,14 @@ export function AppConfigScreen() {
     }
 
     // Revert slug field widget for CTs that are being disabled.
-    // Finds CTs that currently have our app in their editor interface but are
-    // no longer in enabledContentTypes, and resets the slug field back to the
-    // builtin singleLine widget.
-    const previouslyManagedCTs = Object.keys(currentState?.EditorInterface ?? {})
-      .filter((ctId) => ctId !== sitemapCtId)
-    const disabledCTs = previouslyManagedCTs.filter((ctId) => !enabledContentTypes.includes(ctId))
+    // Uses previously-saved parameters (not currentState.EditorInterface) to
+    // reliably detect which CTs were managed before this save.
+    const prevParams = (await sdk.app.getParameters()) as AppInstallationParameters | null
+    const previouslyEnabled = prevParams?.enabledContentTypes ?? []
+    const prevConfigs = prevParams?.contentTypeConfigs ?? {}
+    const disabledCTs = previouslyEnabled.filter((ctId) => !enabledContentTypes.includes(ctId))
     for (const ctId of disabledCTs) {
-      const slugFieldId = contentTypeConfigs[ctId]?.slugFieldId
+      const slugFieldId = prevConfigs[ctId]?.slugFieldId ?? contentTypeConfigs[ctId]?.slugFieldId
       if (!slugFieldId) continue
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -406,10 +405,7 @@ export function AppConfigScreen() {
         // sitemapEntryId intentionally omitted — detect root by sitemapType query
       },
       targetState: {
-        EditorInterface: {
-          ...currentState?.EditorInterface,
-          ...editorInterfaceAssignments,
-        },
+        EditorInterface: editorInterfaceAssignments,
       },
     }
   }, [sdk, enabledContentTypes, contentTypeConfigs, baseUrl, sitemapCtId])
