@@ -704,6 +704,7 @@ export function SitemapPanelWithCallback({
             size="sm"
             onClick={allExpanded ? handleCollapseAll : handleExpandAll}
             className="h-8 text-xs bg-transparent"
+            data-fs-id="toolbar-expand-collapse"
           >
             {allExpanded ? (
               <>
@@ -723,6 +724,7 @@ export function SitemapPanelWithCallback({
               variant={scopeMode === "this" ? "default" : "outline"}
               size="sm"
               onClick={() => setScopeMode((s) => s === "this" ? "full" : "this")}
+              data-fs-id="toolbar-scope-toggle"
               className={cn(
                 "h-8 text-xs shrink-0",
                 scopeMode === "this"
@@ -739,6 +741,7 @@ export function SitemapPanelWithCallback({
             variant={showExcluded ? "default" : "outline"}
             size="sm"
             onClick={() => setShowExcluded((v) => !v)}
+            data-fs-id="toolbar-show-excluded"
             className={cn(
               "h-8 text-xs shrink-0",
               showExcluded
@@ -757,6 +760,7 @@ export function SitemapPanelWithCallback({
             variant="outline"
             size="sm"
             className="h-8 bg-transparent"
+            data-fs-id="toolbar-add-folder"
           >
             <Folder className="mr-1 h-3 w-3" />
             Add folder
@@ -857,6 +861,7 @@ export function SitemapPanelWithCallback({
               onClick={handleConfirmAddFolder}
               disabled={!newFolderTitle.trim() || creatingFolder}
               className="bg-[var(--cf-blue-500)] hover:bg-[var(--cf-blue-600)]"
+              data-fs-id="add-folder-confirm"
             >
               {creatingFolder ? "Creating…" : "Add folder"}
             </Button>
@@ -875,7 +880,7 @@ export function SitemapPanelWithCallback({
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteConfirmNodeId(null)} className="bg-transparent">Cancel</Button>
-            <Button onClick={handleConfirmDelete} className="bg-[var(--cf-red-500)] hover:bg-[var(--cf-red-600)] text-white">Delete</Button>
+            <Button onClick={handleConfirmDelete} className="bg-[var(--cf-red-500)] hover:bg-[var(--cf-red-600)] text-white" data-fs-id="delete-node-confirm">Delete</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -896,7 +901,7 @@ export function SitemapPanelWithCallback({
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setRenameNodeId(null)} className="bg-transparent">Cancel</Button>
-            <Button onClick={handleConfirmRename} disabled={!renameValue.trim()} className="bg-[var(--cf-blue-500)] hover:bg-[var(--cf-blue-600)]">Rename</Button>
+            <Button onClick={handleConfirmRename} disabled={!renameValue.trim()} className="bg-[var(--cf-blue-500)] hover:bg-[var(--cf-blue-600)]" data-fs-id="rename-node-confirm">Rename</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

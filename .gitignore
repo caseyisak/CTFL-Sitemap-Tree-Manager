@@ -49,7 +49,7 @@ certs/
 .specstory/.what-is-this.md
 
 # Docs and local planning (local only)
-docs/
+# docs/
 TODO.md
 
 # Excalidraw diagram skill (local clone)

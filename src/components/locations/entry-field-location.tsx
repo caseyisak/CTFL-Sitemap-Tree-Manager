@@ -295,6 +295,7 @@ export function EntryFieldLocation() {
             variant="ghost"
             size="sm"
             className="h-6 px-2 text-xs text-[var(--cf-gray-500)] hover:text-[var(--cf-gray-700)]"
+            data-fs-id="move-to-folder-toggle"
             onClick={() => {
               const opening = !folderListOpen
               setFolderListOpen(opening)
@@ -330,6 +331,7 @@ export function EntryFieldLocation() {
                 <button
                   type="button"
                   onClick={() => handleSetParent(null)}
+                  data-fs-id="set-parent-root"
                   className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-[var(--cf-gray-50)] transition-colors ${
                     currentParentId === null ? "bg-[var(--cf-blue-50)]" : ""
                   }`}
@@ -350,6 +352,7 @@ export function EntryFieldLocation() {
                       key={entry.id}
                       type="button"
                       title={`folder ID: ${entry.id}`}
+                      data-fs-id="set-parent-entry"
                       onClick={() => handleSetParent(entry.id)}
                       style={{ paddingLeft: `${12 + indentPx}px` }}
                       className={`w-full flex items-center gap-2 pr-3 py-2 text-sm text-left hover:bg-[var(--cf-gray-50)] transition-colors ${
