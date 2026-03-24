@@ -328,6 +328,29 @@ export function AppConfigScreen() {
         console.error(`Failed to update content type ${ctId}:`, e)
       }
 
+      // Directly assign our app as the widget for the selected slug field,
+      // so its appearance is overridden immediately on save (same pattern as
+      // applyEditorInterfaceSettings for the Sitemap CT).
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const ei = await (sdk.cma.editorInterface as any).get({ contentTypeId: ctId })
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const controls: Array<Record<string, any>> = ei.controls ?? []
+        const updated = controls.filter((c) => c.fieldId !== config.slugFieldId)
+        updated.push({
+          fieldId: config.slugFieldId,
+          widgetId: sdk.ids.app,
+          widgetNamespace: "app",
+        })
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (sdk.cma.editorInterface as any).update(
+          { contentTypeId: ctId },
+          { ...ei, controls: updated }
+        )
+      } catch (e) {
+        console.warn(`Could not assign app widget to slug field on ${ctId}:`, e)
+      }
+
       editorInterfaceAssignments[ctId] = {
         controls: [{ fieldId: config.slugFieldId }],
         editors: { position: 1 },
