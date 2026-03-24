@@ -5,6 +5,8 @@ import posthog from "posthog-js"
 
 const POSTHOG_KEY = process.env.NEXT_PUBLIC_POSTHOG_KEY
 const POSTHOG_HOST = process.env.NEXT_PUBLIC_POSTHOG_HOST ?? "https://us.i.posthog.com"
+const DEPLOYMENT_SHA = process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ?? "local"
+const DEPLOYMENT_MSG = process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_MESSAGE ?? ""
 
 export function PostHogInit() {
   useEffect(() => {
@@ -14,6 +16,13 @@ export function PostHogInit() {
       api_host: POSTHOG_HOST,
       capture_pageview: true,
       autocapture: true,
+      capture_exceptions: true,
+    })
+
+    // Tag every event with deployment info for error/regression correlation
+    posthog.register({
+      deployment_sha: DEPLOYMENT_SHA.slice(0, 7),
+      deployment_message: DEPLOYMENT_MSG,
     })
 
     // Fire named events for every data-fs-id click
