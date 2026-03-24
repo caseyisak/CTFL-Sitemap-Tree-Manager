@@ -357,6 +357,33 @@ export function AppConfigScreen() {
       }
     }
 
+    // Revert slug field widget for CTs that are being disabled.
+    // Finds CTs that currently have our app in their editor interface but are
+    // no longer in enabledContentTypes, and resets the slug field back to the
+    // builtin singleLine widget.
+    const previouslyManagedCTs = Object.keys(currentState?.EditorInterface ?? {})
+      .filter((ctId) => ctId !== sitemapCtId)
+    const disabledCTs = previouslyManagedCTs.filter((ctId) => !enabledContentTypes.includes(ctId))
+    for (const ctId of disabledCTs) {
+      const slugFieldId = contentTypeConfigs[ctId]?.slugFieldId
+      if (!slugFieldId) continue
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const ei = await (sdk.cma.editorInterface as any).get({ contentTypeId: ctId })
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const controls: Array<Record<string, any>> = ei.controls ?? []
+        const updated = controls.filter((c) => c.fieldId !== slugFieldId)
+        updated.push({ fieldId: slugFieldId, widgetId: "singleLine", widgetNamespace: "builtin" })
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (sdk.cma.editorInterface as any).update(
+          { contentTypeId: ctId },
+          { ...ei, controls: updated }
+        )
+      } catch (e) {
+        console.warn(`Could not revert slug widget on disabled CT ${ctId}:`, e)
+      }
+    }
+
     // Assign Sitemap CT editor interface
     if (sitemapCtId) {
       editorInterfaceAssignments[sitemapCtId] = {
