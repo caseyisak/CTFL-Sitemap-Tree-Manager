@@ -57,7 +57,42 @@ function LocationRouter() {
   )
 }
 
+const SEQUENCE = [
+  "ArrowUp", "ArrowUp", "ArrowDown", "ArrowDown",
+  "ArrowLeft", "ArrowRight", "ArrowLeft", "ArrowRight",
+  "b", "a",
+]
+
+function useKonamiCode() {
+  useEffect(() => {
+    let index = 0
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === SEQUENCE[index]) {
+        index++
+        if (index === SEQUENCE.length) {
+          console.log(`
+  ██╗  ██╗ █████╗ ███████╗
+  ██║ ██╔╝██╔══██╗╚══███╔╝
+  █████╔╝ ███████║  ███╔╝
+  ██╔═██╗ ██╔══██║ ███╔╝
+  ██║  ██╗██║  ██║███████╗
+  ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝
+
+  Built with ♥ by Kaz
+`)
+          index = 0
+        }
+      } else {
+        index = e.key === SEQUENCE[0] ? 1 : 0
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [])
+}
+
 export function AppWithSDK() {
+  useKonamiCode()
   return (
     <SDKProvider>
       <LocationRouter />
