@@ -7,7 +7,6 @@
       "dependencies": {
         "@contentful/app-sdk": "^4.51.4",
         "@contentful/react-apps-toolkit": "^1.2.20",
-        "@fullstory/browser": "^2.0.8",
         "@hookform/resolvers": "^3.10.0",
         "@radix-ui/react-accordion": "1.2.2",
         "@radix-ui/react-alert-dialog": "1.1.4",
@@ -246,10 +245,6 @@
     "@floating-ui/react-dom": ["@floating-ui/react-dom@2.1.7", "", { "dependencies": { "@floating-ui/dom": "^1.7.5" }, "peerDependencies": { "react": ">=16.8.0", "react-dom": ">=16.8.0" } }, "sha512-0tLRojf/1Go2JgEVm+3Frg9A3IW8bJgKgdO0BN5RkF//ufuz2joZM63Npau2ff3J6lUVYgDSNzNkR+aH3IVfjg=="],
 
     "@floating-ui/utils": ["@floating-ui/utils@0.2.10", "", {}, "sha512-aGTxbpbg8/b5JfU1HXSrbH3wXZuLPJcNEcZQFMxLs3oSzgtVu6nFPkbbGGUvBcUjKV2YyB9Wxxabo+HEH9tcRQ=="],
-
-    "@fullstory/browser": ["@fullstory/browser@2.0.8", "", { "dependencies": { "@fullstory/snippet": "2.0.6" } }, "sha512-MOylRaBAs7y7xFLvBQo446/xbTZ9MbPZSn3B4go4+eXI1o/uY7F+30ow6CA1i8fVoE4ScXDYpRtffDBBFsd8CQ=="],
-
-    "@fullstory/snippet": ["@fullstory/snippet@2.0.6", "", {}, "sha512-GECETOTiW8XhRAr4q94rXY8Uc315KGmSepZQvBKW1LONJiKFvKzKpm/6Lystw/8lHFsDT7hD5VIZntMNOO2VAQ=="],
 
     "@hono/node-server": ["@hono/node-server@1.19.11", "", { "peerDependencies": { "hono": "^4" } }, "sha512-dr8/3zEaB+p0D2n/IUrlPF1HZm586qgJNXK1a9fhg/PzdtkK7Ksd5l312tJX2yBuALqDYBlG20QEbayqPyxn+g=="],
 
