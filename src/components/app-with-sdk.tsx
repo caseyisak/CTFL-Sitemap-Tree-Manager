@@ -4,6 +4,7 @@ import { useEffect } from "react"
 import { SDKProvider, useSDK } from "@contentful/react-apps-toolkit"
 import { locations } from "@contentful/app-sdk"
 import type { KnownSDK, PageAppSDK } from "@contentful/app-sdk"
+import posthog from "posthog-js"
 import { AppConfigScreen } from "@/components/locations/app-config-screen"
 import { EntryFieldLocation } from "@/components/locations/entry-field-location"
 import { EntryEditorLocation } from "@/components/locations/entry-editor-location"
@@ -20,6 +21,29 @@ function PageLocation() {
 
 function LocationRouter() {
   const sdk = useSDK<KnownSDK>()
+
+  useEffect(() => {
+    const user = sdk.user
+    const userId = user.sys.id
+    posthog.identify(userId, {
+      email: user.email,
+      name: `${user.firstName} ${user.lastName}`.trim(),
+      firstName: user.firstName,
+      lastName: user.lastName,
+    })
+
+    const location = sdk.location.is(locations.LOCATION_APP_CONFIG)
+      ? "app-config"
+      : sdk.location.is(locations.LOCATION_ENTRY_EDITOR)
+        ? "entry-editor"
+        : sdk.location.is(locations.LOCATION_ENTRY_FIELD)
+          ? "entry-field"
+          : sdk.location.is(locations.LOCATION_PAGE)
+            ? "page"
+            : "unknown"
+
+    posthog.capture("app_location_opened", { location })
+  }, [sdk])
 
   if (sdk.location.is(locations.LOCATION_APP_CONFIG)) return <AppConfigScreen />
   if (sdk.location.is(locations.LOCATION_PAGE)) return <PageLocation />

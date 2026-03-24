@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from "react"
 import { useSDK } from "@contentful/react-apps-toolkit"
 import type { EditorAppSDK } from "@contentful/app-sdk"
+import posthog from "posthog-js"
 import type {
   AppInstallationParameters,
   ContentfulPageEntry,
@@ -921,6 +922,7 @@ export function EntryEditorLocation() {
           } catch { /* field may not be accessible from editor SDK */ }
           setTimeout(() => { isSavingExcludeRef.current = false }, 300)
         }
+        posthog.capture("exclude_from_sitemap_toggled", { nodeId, excluded })
       } catch (e) {
         console.error("Failed to update excludeFromSitemap:", e)
       }

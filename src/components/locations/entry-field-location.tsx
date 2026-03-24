@@ -5,6 +5,7 @@ import { useSDK, useAutoResizer } from "@contentful/react-apps-toolkit"
 import type { FieldAppSDK } from "@contentful/app-sdk"
 import type { AppInstallationParameters, FolderNode, SitemapMetadata } from "@/lib/contentful-types"
 import { slugify } from "@/lib/sitemap-utils"
+import posthog from "posthog-js"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
@@ -185,6 +186,7 @@ export function EntryFieldLocation() {
   const handleSlugChange = async (newSlug: string) => {
     setSlug(newSlug)
     await sdk.field.setValue(newSlug)
+    posthog.capture("slug_changed", { entryId: sdk.entry.getSys().id })
 
     const metadataField = sdk.entry.fields["sitemapMetadata"]
     if (metadataField) {
@@ -209,6 +211,10 @@ export function EntryFieldLocation() {
       await metadataField.setValue(newMeta)
       setMetadata(newMeta)
     }
+    posthog.capture("entry_moved_to_folder", {
+      entryId: sdk.entry.getSys().id,
+      toRoot: parentId === null,
+    })
     setFolderListOpen(false)
     setFolderSearch("")
   }
