@@ -23,11 +23,12 @@ A **Contentful App** that gives content editors a visual, drag-and-drop interfac
 
 ## App locations
 
-The app registers three Contentful locations:
+The app registers four Contentful locations:
 
 | Location | Purpose |
 |---|---|
 | **App Config** | Space-level setup: base URL, managed content types, sitemap entry management |
+| **Page** | Shown in the Contentful main nav ("Apps" menu) — redirects to App Config |
 | **Entry Editor** | Full-width tree panel shown when editing any managed content type |
 | **Entry Field** | Inline slug/folder picker embedded in the entry sidebar |
 
@@ -130,6 +131,7 @@ When you save the App Config screen, the app automatically:
 3. **Adds fields to managed content types** — `sitemapMetadata` (Object) and `excludeFromSitemap` (Boolean) are added to each enabled CT if not already present
 4. **Creates a "Sitemap Info" field group** on each managed CT, grouping `sitemapMetadata` and `excludeFromSitemap` together in the Contentful entry editor
 5. **Assigns the app** as the Entry Editor and Entry Field widget for each managed CT
+6. **Overrides the slug field appearance** — the slug field selected for each CT is immediately set to use the app widget, replacing the native Contentful slug widget
 
 All operations are idempotent — re-saving is safe and won't duplicate anything.
 
@@ -175,6 +177,7 @@ Child Sitemap entries hold `contentTypes`, `changeFrequency`, and `priority` —
 | UI | shadcn/ui (Radix UI primitives) |
 | Icons | Lucide React |
 | Contentful | `@contentful/app-sdk`, `@contentful/react-apps-toolkit`, `contentful-management` |
+| Analytics | PostHog (session recording + event tracking via `data-fs-id` attributes) |
 | Testing | Vitest + jsdom + Testing Library |
 
 ---
@@ -192,7 +195,8 @@ src/
     globals.css                   # Forma36 tokens + Tailwind config
 
   components/
-    app-with-sdk.tsx              # SDKProvider + location router
+    app-with-sdk.tsx              # SDKProvider + location router (4 locations)
+    posthog-init.tsx              # PostHog analytics init + data-fs-id click tracking
     locations/
       app-config-screen.tsx       # App Config location
       entry-editor-location.tsx   # Entry Editor location
@@ -232,11 +236,22 @@ bun run test:watch    # watch mode
 
 ---
 
+## Analytics
+
+PostHog is used for session recording and event tracking. It works inside Contentful's cross-origin iframe context (unlike FullStory, which does not).
+
+**To disable:** remove `NEXT_PUBLIC_POSTHOG_KEY` from Vercel env vars and redeploy.
+
+Key events tracked via `data-fs-id` attributes — see `docs/fullstory-tracking.md` for the full list.
+
+---
+
 ## Known issues / gotchas
 
 - **`bun run lint`** requires Node 20.9.0+. It will fail on Node 18 due to ESLint 9 + ajv compatibility.
 - **Field groups** (`sitemapInfo`) are set on managed CTs at App Config save time. If you add a new CT to the app before the field group feature existed, re-save App Config to backfill the group.
 - **Static export** means no API routes. The app is purely client-side — all Contentful data access goes through the App SDK and CMA token provided by the iframe context.
+- **Page location nav link** — requires the "Page" location to be enabled in the Contentful App Definition with "Show app in main navigation" checked. Link path should be `/`.
 
 ---
 
