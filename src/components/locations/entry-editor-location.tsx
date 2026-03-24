@@ -909,18 +909,22 @@ export function EntryEditorLocation() {
           .get({ contentTypeId: ctId })
           .then((ct) => ct.fields.some((f) => f.id === "excludeFromSitemap"), () => false)
         if (!hasField) return
-        await sdk.cma.entry.update(
-          { entryId: nodeId },
-          { ...entry, fields: { ...entry.fields, excludeFromSitemap: { "en-US": excluded } } }
-        )
-        // Notify the Editor tab's radio button for the currently-open entry
         if (nodeId === currentEntryId) {
+          // For the current entry: use SDK field setter only so Contentful's normal
+          // auto-save handles the write. CMA update here creates a new version which
+          // then conflicts with the auto-save draft, producing the "new version" toast.
           isSavingExcludeRef.current = true
           try {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             await (sdk.entry as any)?.fields?.["excludeFromSitemap"]?.setValue(excluded)
           } catch { /* field may not be accessible from editor SDK */ }
           setTimeout(() => { isSavingExcludeRef.current = false }, 300)
+        } else {
+          // For other entries in the tree: no auto-save available, must go via CMA.
+          await sdk.cma.entry.update(
+            { entryId: nodeId },
+            { ...entry, fields: { ...entry.fields, excludeFromSitemap: { "en-US": excluded } } }
+          )
         }
         posthog.capture("exclude_from_sitemap_toggled", { nodeId, excluded })
       } catch (e) {
