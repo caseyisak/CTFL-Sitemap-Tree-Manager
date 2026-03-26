@@ -28,6 +28,26 @@ import { Globe, LayoutGrid, Plus, CheckCircle2, AlertCircle, ExternalLink, Copy,
 
 const CHANGE_FREQ_OPTIONS = ["always", "hourly", "daily", "weekly", "monthly", "yearly", "never"] as const
 
+/**
+ * Returns true if the CMA error is a 422 caused by fieldGroups/groupId not being supported
+ * in this space. Some Contentful plans don't support the field groups (tabs) feature.
+ */
+function isFieldGroupsUnsupportedError(e: unknown): boolean {
+  if (e !== null && typeof e === "object") {
+    const obj = e as Record<string, unknown>
+    if (obj.status === 422) {
+      const errors = (obj.details as Record<string, unknown> | undefined)?.errors
+      if (Array.isArray(errors)) {
+        return errors.some((err: Record<string, unknown>) => {
+          const path = err.path as string[] | undefined
+          return path?.[0] === "fieldGroups" || path?.[2] === "groupId"
+        })
+      }
+    }
+  }
+  return false
+}
+
 /** Extract a human-readable message from any thrown value (including non-Error CMA responses). */
 function extractErrorMsg(e: unknown): string {
   if (e instanceof Error) return e.message
@@ -315,13 +335,27 @@ export function AppConfigScreen() {
         )
 
         if (fieldsToAdd.length > 0 || !hasGroup || missingGroupId) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const updatedCt = await sdk.cma.contentType.update(
-            { contentTypeId: ctId },
+          try {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          { ...ct, fields: updatedFields, fieldGroups: updatedGroups } as any // fieldGroups not in SDK types
-          )
-          await sdk.cma.contentType.publish({ contentTypeId: ctId }, updatedCt)
+            const updatedCt = await sdk.cma.contentType.update(
+              { contentTypeId: ctId },
+              { ...ct, fields: updatedFields, fieldGroups: updatedGroups } as any // fieldGroups not in SDK types
+            )
+            await sdk.cma.contentType.publish({ contentTypeId: ctId }, updatedCt)
+          } catch (updateErr) {
+            if (isFieldGroupsUnsupportedError(updateErr) && fieldsToAdd.length > 0) {
+              // This space doesn't support the field groups (tabs) feature — retry without
+              // fieldGroups on the CT body and without groupId on individual fields.
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const fieldsWithoutGroupId = updatedFields.map(({ groupId: _g, ...f }: any) => f)
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const { fieldGroups: _fg, ...ctBodyWithoutGroups } = { ...ct, fields: fieldsWithoutGroupId } as any
+              const updatedCt = await sdk.cma.contentType.update({ contentTypeId: ctId }, ctBodyWithoutGroups)
+              await sdk.cma.contentType.publish({ contentTypeId: ctId }, updatedCt)
+            } else {
+              throw updateErr
+            }
+          }
         }
       } catch (e) {
         console.error(`Failed to update content type ${ctId}:`, e)
